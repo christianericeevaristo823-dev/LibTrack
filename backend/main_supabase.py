@@ -73,6 +73,9 @@ BUCKET_EBOOKS = "ebooks"
 BUCKET_COVERS = "book-covers"
 BUCKET_RESEARCH = "research-pdfs"
 
+# Cache e-book storage paths to avoid rescanning Supabase for every PDF request.
+EBOOK_KEY_CACHE = {}
+
 
 def storage_upload(bucket: str, key: str, contents: bytes, content_type: str):
     if not supabase:
@@ -1293,8 +1296,22 @@ def ebook_out(path: Path):
 
 def find_ebook_key(stored_name: str):
     if supabase:
-        matches = [key for key in storage_walk(BUCKET_EBOOKS) if key.rsplit("/", 1)[-1] == stored_name]
-        return matches[0] if matches else None
+        # The /ebooks endpoint fills this cache when the catalog is loaded.
+        cached_key = EBOOK_KEY_CACHE.get(stored_name)
+        if cached_key:
+            return cached_key
+
+        # Fallback for a direct PDF URL that was opened before the catalog loaded.
+        matches = [
+            key
+            for key in storage_walk(BUCKET_EBOOKS)
+            if key.rsplit("/", 1)[-1] == stored_name
+        ]
+        if matches:
+            EBOOK_KEY_CACHE[stored_name] = matches[0]
+            return matches[0]
+        return None
+
     matches = list(EBOOK_PDF_DIR.rglob(stored_name))
     return matches[0] if matches else None
 
@@ -1305,16 +1322,29 @@ def list_ebooks():
     if supabase:
         keys = storage_walk(BUCKET_EBOOKS)
         result = []
+
         for key in keys:
+            stored_name = key.rsplit("/", 1)[-1]
+            EBOOK_KEY_CACHE[stored_name] = key
+
             try:
                 meta = supabase.storage.from_(BUCKET_EBOOKS).info(key)
-                size = (meta or {}).get("metadata", {}).get("size", 0) if isinstance(meta, dict) else 0
+                size = (
+                    (meta or {}).get("metadata", {}).get("size", 0)
+                    if isinstance(meta, dict)
+                    else 0
+                )
             except Exception:
                 size = 0
+
             result.append(ebook_out_from_key(key, size))
     else:
-        files = [p for p in EBOOK_PDF_DIR.rglob("*.pdf") if p.is_file() and not p.name.startswith(".")]
+        files = [
+            p for p in EBOOK_PDF_DIR.rglob("*.pdf")
+            if p.is_file() and not p.name.startswith(".")
+        ]
         result = [ebook_out(p) for p in files]
+
     return sorted(result, key=lambda item: item["title"].casefold())
 
 
@@ -1358,6 +1388,10 @@ async def upload_ebook(
             target.write_bytes(contents)
     except Exception as exc:
         raise HTTPException(status_code=500, detail="Could not save the e-book PDF to storage.") from exc
+
+    if supabase:
+        EBOOK_KEY_CACHE[stored] = key
+
     return ebook_out_from_key(key, len(contents))
 
 
@@ -1431,6 +1465,9 @@ def delete_ebook(ebook_id: str, admin: User = Depends(require_admin)):
             match.unlink()
     except Exception as exc:
         raise HTTPException(status_code=500, detail="Could not delete the e-book PDF.") from exc
+
+    EBOOK_KEY_CACHE.pop(safe_id, None)
+
     return {"message": "E-book deleted successfully.", "id": safe_id}
 
 
