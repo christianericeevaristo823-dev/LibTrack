@@ -429,6 +429,7 @@ app.add_middleware(
         "https://consequences-deviation-oriented-human.trycloudflare.com",
         "https://lib-track-starter-project.vercel.app",
         "https://neustpoc-libtrack.vercel.app",
+        "https://lib-track-nine.vercel.app",
     ],
     allow_credentials=False,
     allow_methods=[
