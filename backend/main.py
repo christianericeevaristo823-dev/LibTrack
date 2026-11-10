@@ -354,6 +354,8 @@ app.add_middleware(
         "https://consequences-deviation-oriented-human.trycloudflare.com",
         "https://lib-track-starter-project.vercel.app",
         "https://neustpoc-libtrack.vercel.app",
+        "https://localhost",
+        "https://libtrack-poc.vercel.app",
     ],
     allow_credentials=False,
     allow_methods=[
