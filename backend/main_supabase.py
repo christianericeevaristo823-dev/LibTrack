@@ -418,22 +418,12 @@ if not SUPABASE_ENABLED:
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "http://192.168.100.41:5173",
-        "http://192.168.254.130:5173",
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "http://192.168.254.101:8000",
-        "http://192.168.100.44:5173",
-        "http://192.168.254.101:5173",
-         "http://192.168.1.21:5173",
-        "https://consequences-deviation-oriented-human.trycloudflare.com",
-        "https://lib-track-starter-project.vercel.app",
-        "https://neustpoc-libtrack.vercel.app",
-        "https://lib-track-nine.vercel.app",
-        "https://libtrack-poc.vercel.app",
+  allow_origins=[
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "https://libtrack-poc.vercel.app",
     ],
     allow_credentials=False,
     allow_methods=[
