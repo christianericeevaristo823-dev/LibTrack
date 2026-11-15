@@ -2,6 +2,9 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 
 import { createRoot } from 'react-dom/client';
 
+import { Capacitor } from '@capacitor/core';
+import { LocalNotifications } from '@capacitor/local-notifications';
+
 import {
 
   IonApp,
@@ -2195,6 +2198,7 @@ function App() {
   const [loginSessions, setLoginSessions] = useState<LoginSession[]>([]);
 
   const [borrowings, setBorrowings] = useState<Borrowing[]>([]);
+  const dueReminderSignatureRef = useRef<string | null>(null);
   const [lostBookCases, setLostBookCases] = useState<LostBookCase[]>([]);
   const [lostCasesLoading, setLostCasesLoading] = useState(false);
   const [lostBookDialog, setLostBookDialog] = useState<{
@@ -2952,6 +2956,164 @@ function App() {
 
   // ---------------------------------------------------------
 
+  // ---------------------------------------------------------
+  // ANDROID LOCAL DUE-DATE REMINDERS
+  // ---------------------------------------------------------
+  // These reminders are scheduled on the student's Android device.
+  // They continue to fire while the app is closed after they have been
+  // scheduled. A device must sync the borrowing record at least once.
+  async function syncDueDateReminders(records: Borrowing[]) {
+    if (!Capacitor.isNativePlatform() || Capacitor.getPlatform() !== 'android' || !isStudentAccount) {
+      return;
+    }
+
+    const activeRecords = records
+      .filter((record) => record.status === 'borrowed' && !record.returned_at && /^\d{4}-\d{2}-\d{2}$/.test(record.due_date))
+      .sort((a, b) => a.id - b.id);
+
+    const signature = activeRecords.map((record) => `${record.id}:${record.due_date}`).join('|') || 'none';
+    if (dueReminderSignatureRef.current === signature) return;
+
+    try {
+      const pendingResult = await LocalNotifications.getPending();
+      const managedPending = (pendingResult.notifications || []).filter(
+        (item) => item.extra?.libtrackReminder === true
+      );
+
+      // Pending notifications that no longer match an active borrowing are removed.
+      const activeIds = new Set(activeRecords.map((record) => record.id));
+      const stalePending = managedPending.filter((item) => {
+        const borrowingId = Number(item.extra?.borrowingId);
+        return !activeIds.has(borrowingId);
+      });
+      if (stalePending.length) {
+        await LocalNotifications.cancel({
+          notifications: stalePending.map((item) => ({ id: item.id })),
+        });
+      }
+
+      if (!activeRecords.length) {
+        dueReminderSignatureRef.current = signature;
+        return;
+      }
+
+      let permission = await LocalNotifications.checkPermissions();
+      if (permission.display !== 'granted') {
+        permission = await LocalNotifications.requestPermissions();
+      }
+      if (permission.display !== 'granted') {
+        console.warn('LibTrack due-date reminders are disabled because notification permission was not granted.');
+        dueReminderSignatureRef.current = signature;
+        return;
+      }
+
+      await LocalNotifications.createChannel({
+        id: 'libtrack-due-reminders',
+        name: 'Book Due-Date Reminders',
+        description: 'Reminders one day before and on the book return due date',
+        importance: 5,
+        vibration: true,
+      });
+
+      const booksResponse = await fetch(`${API}/books`);
+      const bookRows = await readResponse(booksResponse);
+      const bookTitleById = new Map<number, string>(
+        (Array.isArray(bookRows) ? bookRows : []).map((book: Book) => [book.id, book.title] as [number, string])
+      );
+
+      const now = Date.now();
+      const desiredNotifications: Array<{
+        id: number;
+        title: string;
+        body: string;
+        at: Date;
+        borrowingId: number;
+        dueDate: string;
+        reminderKind: 'day_before' | 'due_today';
+      }> = [];
+
+      for (const record of activeRecords) {
+        // IDs are deterministic, so repeated syncs do not create duplicates.
+        const baseId = record.id * 2;
+        if (!Number.isSafeInteger(baseId) || baseId < 0 || baseId + 2 > 2147483647) {
+          console.warn(`Skipping due-date reminders for borrowing #${record.id}: notification ID is out of range.`);
+          continue;
+        }
+
+        const title = bookTitleById.get(record.book_id) || 'your borrowed book';
+        const dueDay = new Date(`${record.due_date}T08:00:00+08:00`);
+        // Manila has no daylight-saving changes, so subtract exactly 24 hours.
+        const dayBefore = new Date(dueDay.getTime() - 24 * 60 * 60 * 1000);
+
+        if (dayBefore.getTime() > now) {
+          desiredNotifications.push({
+            id: baseId + 1,
+            title: 'Book due tomorrow',
+            body: `Please remember to return “${title}” tomorrow (${record.due_date}).`,
+            at: dayBefore,
+            borrowingId: record.id,
+            dueDate: record.due_date,
+            reminderKind: 'day_before',
+          });
+        }
+
+        if (dueDay.getTime() > now) {
+          desiredNotifications.push({
+            id: baseId + 2,
+            title: 'Book due today',
+            body: `Today is the return due date for “${title}”. Please return it to the library.`,
+            at: dueDay,
+            borrowingId: record.id,
+            dueDate: record.due_date,
+            reminderKind: 'due_today',
+          });
+        }
+      }
+
+      const desiredById = new Map(desiredNotifications.map((item) => [item.id, item]));
+      const outdatedPending = managedPending.filter((item) => {
+        const desired = desiredById.get(item.id);
+        return !desired ||
+          item.extra?.dueDate !== desired.dueDate ||
+          item.extra?.reminderKind !== desired.reminderKind;
+      });
+      if (outdatedPending.length) {
+        await LocalNotifications.cancel({
+          notifications: outdatedPending.map((item) => ({ id: item.id })),
+        });
+      }
+
+      const cancelledIds = new Set(outdatedPending.map((item) => item.id));
+      const stillPendingIds = new Set(
+        managedPending.filter((item) => !cancelledIds.has(item.id)).map((item) => item.id)
+      );
+      const notificationsToSchedule = desiredNotifications
+        .filter((item) => !stillPendingIds.has(item.id))
+        .map((item) => ({
+          id: item.id,
+          title: item.title,
+          body: item.body,
+          schedule: { at: item.at },
+          channelId: 'libtrack-due-reminders',
+          extra: {
+            libtrackReminder: true,
+            borrowingId: item.borrowingId,
+            dueDate: item.dueDate,
+            reminderKind: item.reminderKind,
+          },
+        }));
+
+      if (notificationsToSchedule.length) {
+        await LocalNotifications.schedule({ notifications: notificationsToSchedule });
+      }
+
+      dueReminderSignatureRef.current = signature;
+    } catch (err) {
+      // Notification failures must never interrupt borrowing history or the dashboard.
+      console.warn('Could not sync LibTrack Android due-date reminders:', err);
+    }
+  }
+
   // BORROWING ACTIVITY / STUDENT BORROWING HISTORY
 
   // The backend returns all records to admins and only the signed-in student's
@@ -2995,6 +3157,10 @@ function App() {
 
           setBorrowingsError('');
 
+          if (isStudentAccount) {
+            void syncDueDateReminders(Array.isArray(data) ? data as Borrowing[] : []);
+          }
+
         }
 
       } catch (err) {
@@ -3022,7 +3188,7 @@ function App() {
 
     };
 
-  }, [token, isAdmin]);
+  }, [token, isAdmin, isStudentAccount]);
 
   // ---------------------------------------------------------
 
