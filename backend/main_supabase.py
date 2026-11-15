@@ -464,7 +464,7 @@ def migrate_database():
         "section": "VARCHAR(50)",
         "username": "VARCHAR(50)",
         "profile_photo_url": "VARCHAR(1000)",
-        "borrowing_suspended": "BOOLEAN NOT NULL DEFAULT FALSE",
+        "borrowing_suspended": "BOOLEAN NOT NULL DEFAULT 0",
     }
 
     with engine.begin() as connection:
@@ -531,7 +531,7 @@ def migrate_database():
             )
         if "is_active" not in book_columns:
             connection.execute(
-                text("ALTER TABLE books ADD COLUMN is_active BOOLEAN NOT NULL DEFAULT TRUE")
+                text("ALTER TABLE books ADD COLUMN is_active BOOLEAN NOT NULL DEFAULT 1")
             )
 
 migrate_database()
