@@ -106,6 +106,16 @@ type Book = {
 
 };
 
+
+function fileToDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(new Error('Could not read the selected photo.'));
+    reader.readAsDataURL(file);
+  });
+}
+
 function resolveBookImageUrl(value?: string | null): string | null {
   if (!value?.trim()) return null;
 
@@ -330,6 +340,20 @@ function AuthorDisplay({ book, prefix = '' }: { book: Book; prefix?: string }) {
   );
 }
 
+type MostBorrowedBook = Book & {
+  borrow_count: number;
+};
+
+type MostBorrowingStudent = {
+  id: number;
+  full_name: string;
+  student_id?: string | null;
+  course?: string | null;
+  year?: string | null;
+  section?: string | null;
+  borrow_count: number;
+};
+
 type AuthUser = {
 
   id?: number;
@@ -351,6 +375,7 @@ type AuthUser = {
   year?: string | null;
 
   section?: string | null;
+  profile_photo_url?: string | null;
 
 };
 
@@ -370,6 +395,8 @@ type Account = {
 
   username?: string | null;
 
+  profile_photo_url?: string | null;
+
   email: string;
 
   role: string;
@@ -387,6 +414,32 @@ type Borrowing = {
   returned_at?: string | null;
   status: string;
   overdue?: boolean;
+};
+
+type LostBookCase = {
+  id: number;
+  borrowing_id: number;
+  user_id: number;
+  book_id: number;
+  report_date: string;
+  market_value: number;
+  processing_fee: number;
+  additional_fine: number;
+  amount_due: number;
+  deadline: string;
+  case_type: string;
+  resolution_status: string;
+  resolution_note?: string | null;
+  resolved_at?: string | null;
+};
+
+type UserNotification = {
+  id: number;
+  title: string;
+  message: string;
+  notification_type: string;
+  is_read: boolean;
+  created_at?: string | null;
 };
 
 type LoginSession = {
@@ -418,14 +471,37 @@ type Page =
   | 'research'
 
   | 'ebooks'
+  | 'inventory'
+
+  | 'borrowingStats'
 
   | 'borrowings'
+
+  | 'lostBooks'
 
   | 'sessions'
 
   | 'accounts'
 
-  | 'profile';
+  | 'profile'
+  | 'settings'
+  | 'admin-connection'
+  | 'admin-borrowing-schedule'
+  | 'admin-library-schedule'
+  | 'admin-weekend-notice'
+  | 'admin-password'
+  | 'admin-problem-reports'
+  | 'user-password'
+  | 'user-notifications'
+  | 'user-about'
+  | 'user-guidelines'
+  | 'user-support'
+  | 'user-report'
+  | 'user-privacy'
+  | 'user-library-schedule'
+  | 'user-requests'
+  | 'user-saved-books'
+  | 'user-preferences';
 
 type ResearchView = 'collections' | 'course' | 'reader';
 
@@ -433,6 +509,7 @@ type ResearchMaterial = {
   id: number;
   title: string;
   authors: string;
+  teacher?: string | null;
   year: string;
   course: string;
   subject: string;
@@ -444,6 +521,7 @@ type ResearchMaterial = {
   note?: string | null;
   has_pdf?: boolean;
   pdf_url?: string | null;
+  cover_image?: string | null;
 };
 
 type EBook = {
@@ -641,7 +719,7 @@ async function libtrackPrompt(
   inputType: 'text' | 'number' | 'date' | 'url' = 'text',
 ): Promise<string | null> {
   const dialog = await alertController.create({
-    cssClass: 'libtrack-alert',
+    cssClass: 'libtrack-alert libtrack-danger-alert',
     header: 'LibTrack',
     message,
     inputs: [{
@@ -964,8 +1042,8 @@ function App() {
   // and a fixed bottom navigation similar to the supplied reference image.
   useEffect(() => {
     const styleId = 'libtrack-mobile-library-style';
-    if (document.getElementById(styleId)) return;
-    const style = document.createElement('style');
+    const existingStyle = document.getElementById(styleId) as HTMLStyleElement | null;
+    const style = existingStyle || document.createElement('style');
     style.id = styleId;
     style.textContent = `
       /* LibTrack-branded single-form dialogs */
@@ -1278,6 +1356,33 @@ function App() {
         border-radius: inherit !important;
         margin: 0 !important;
       }
+      .saved-book-cover {
+        position: relative !important;
+        display: block !important;
+        width: 100% !important;
+        height: 100% !important;
+        min-width: 0 !important;
+        min-height: 0 !important;
+        max-width: 100% !important;
+        max-height: 100% !important;
+        flex: 0 0 100% !important;
+        align-self: stretch !important;
+        margin: 0 !important;
+        border-radius: inherit !important;
+        box-sizing: border-box !important;
+        overflow: hidden !important;
+      }
+      .saved-book-cover img {
+        position: absolute !important;
+        inset: 0 !important;
+        width: 100% !important;
+        height: 100% !important;
+        max-width: 100% !important;
+        object-fit: contain !important;
+        object-position: center !important;
+        padding: 2px !important;
+        margin: 0 !important;
+      }
       .book-cover-detail img {
         position: absolute !important;
         inset: 0 !important;
@@ -1289,6 +1394,120 @@ function App() {
         object-position: center !important;
         padding: 8px !important;
         margin: 0 !important;
+      }
+
+
+      /* Admin welcome hero: larger, more polished layered-book illustration. */
+      .welcome-banner.admin-banner {
+        position: relative !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: space-between !important;
+        gap: 28px !important;
+        width: 100% !important;
+        min-height: 218px !important;
+        padding: 24px clamp(28px, 5vw, 64px) !important;
+        box-sizing: border-box !important;
+        overflow: hidden !important;
+        border-radius: 0 0 24px 24px !important;
+        background:
+          radial-gradient(circle at 82% 48%, rgba(104,151,166,.2) 0 17%, transparent 17.2%),
+          linear-gradient(112deg, #10283f 0%, #173b56 58%, #28566a 100%) !important;
+        box-shadow: 0 18px 38px rgba(13,35,56,.16) !important;
+      }
+      .admin-banner .welcome-copy {
+        position: relative !important;
+        z-index: 3 !important;
+        flex: 1 1 58% !important;
+        max-width: 760px !important;
+      }
+      .admin-banner .gold-kicker {
+        display: inline-block !important;
+        margin-bottom: 18px !important;
+        color: #f2c65b !important;
+        font-size: 13px !important;
+        font-weight: 850 !important;
+        letter-spacing: .17em !important;
+      }
+      .admin-banner .welcome-copy h2 {
+        margin: 0 0 14px !important;
+        color: #fff !important;
+        font-size: clamp(32px, 3vw, 42px) !important;
+        line-height: 1.12 !important;
+        letter-spacing: -.035em !important;
+      }
+      .admin-banner .welcome-copy h2 em { color: #fff !important; font-style: normal !important; }
+      .admin-banner .welcome-copy p {
+        max-width: 650px !important;
+        margin: 0 !important;
+        color: #c7d5e1 !important;
+        font-size: clamp(15px, 1.25vw, 18px) !important;
+        line-height: 1.65 !important;
+      }
+      .admin-banner .banner-art {
+        position: relative !important;
+        flex: 0 0 clamp(220px, 25vw, 300px) !important;
+        width: clamp(220px, 25vw, 300px) !important;
+        height: 194px !important;
+        margin: 0 !important;
+        transform: none !important;
+        transform-origin: center !important;
+      }
+      .admin-banner .art-circle {
+        position: absolute !important;
+        width: 190px !important; height: 190px !important;
+        left: 50% !important; top: 50% !important;
+        transform: translate(-50%,-50%) !important;
+        border-radius: 50% !important;
+        background: linear-gradient(145deg, rgba(255,255,255,.055), rgba(255,255,255,.015)) !important;
+        border: 1px solid rgba(220,235,245,.12) !important;
+        box-shadow: inset 0 0 45px rgba(255,255,255,.025) !important;
+      }
+      .admin-banner .art-book {
+        position: absolute !important;
+        bottom: 18px !important;
+        width: 70px !important; height: 150px !important;
+        border: 1px solid rgba(15,32,45,.16) !important;
+        border-radius: 5px 10px 10px 5px !important;
+        box-shadow: 8px 11px 17px rgba(3,16,29,.28), inset 7px 0 0 rgba(20,35,48,.17), inset -3px 0 0 rgba(255,255,255,.22) !important;
+        background-clip: padding-box !important;
+        transform-origin: bottom center !important;
+      }
+      .admin-banner .art-book::before {
+        content: "" !important;
+        position: absolute !important;
+        left: 8px !important; right: 7px !important; top: 8px !important; bottom: 8px !important;
+        border: 1px solid rgba(255,255,255,.42) !important;
+        border-left: 2px solid rgba(255,255,255,.55) !important;
+        border-radius: 2px 6px 6px 2px !important;
+        box-shadow: inset 2px 0 0 rgba(255,255,255,.16), inset -2px 0 0 rgba(0,0,0,.07) !important;
+      }
+      .admin-banner .art-book::after {
+        content: "" !important;
+        position: absolute !important;
+        left: 17px !important; right: 13px !important; top: 29px !important;
+        height: 2px !important; border-radius: 5px !important;
+        background: rgba(255,255,255,.55) !important;
+        box-shadow: 0 6px 0 rgba(255,255,255,.3), 0 12px 0 rgba(255,255,255,.22), 0 34px 0 rgba(255,255,255,.18) !important;
+      }
+      .admin-banner .art-book-a {
+        left: 38px !important; bottom: 12px !important; background: linear-gradient(100deg,#b98532 0 10%,#f1cd76 13%,#e3b957 100%) !important;
+        transform: rotate(-12deg) !important; z-index: 1 !important;
+      }
+      .admin-banner .art-book-b {
+        left: 94px !important; bottom: 18px !important; height: 166px !important; width: 76px !important;
+        background: linear-gradient(100deg,#b9ad9a 0 9%,#fff9ed 13%,#eee3d1 100%) !important;
+        transform: rotate(5deg) !important; z-index: 2 !important;
+      }
+      .admin-banner .art-book-c {
+        left: 151px !important; bottom: 12px !important;
+        background: linear-gradient(100deg,#244f55 0 10%,#4c8584 14%,#2d666d 100%) !important;
+        transform: rotate(13deg) !important; z-index: 3 !important;
+      }
+      .admin-banner .art-plant {
+        position: absolute !important; right: 0 !important; top: 8px !important;
+        color: #d6d99a !important; font-size: 64px !important; line-height: 1 !important;
+        transform: rotate(12deg) !important; text-shadow: 0 8px 18px rgba(0,0,0,.12) !important;
       }
 
       @media (max-width: 700px) {
@@ -1314,6 +1533,30 @@ function App() {
         .welcome-banner h2 { font-size: 27px !important; line-height: 1.15; }
         .welcome-banner p { font-size: 13px !important; }
         .banner-art { transform: scale(.75); transform-origin: right center; margin-left: -28px; }
+
+        .welcome-banner.admin-banner {
+          min-height: 190px !important;
+          padding: 20px 18px !important;
+          gap: 6px !important;
+          border-radius: 18px !important;
+        }
+        .admin-banner .welcome-copy { flex: 1 1 62% !important; max-width: none !important; }
+        .admin-banner .gold-kicker { font-size: 9px !important; letter-spacing: .12em !important; margin-bottom: 13px !important; }
+        .admin-banner .welcome-copy h2 { font-size: clamp(25px, 7vw, 31px) !important; margin-bottom: 10px !important; }
+        .admin-banner .welcome-copy p { font-size: 12px !important; line-height: 1.5 !important; }
+        .admin-banner .banner-art {
+          flex: 0 0 112px !important; width: 112px !important; height: 138px !important;
+          margin: 0 -8px 0 -12px !important; transform: none !important;
+        }
+        .admin-banner .art-circle { width: 116px !important; height: 116px !important; }
+        .admin-banner .art-book { width: 34px !important; height: 88px !important; bottom: 9px !important; border-radius: 3px 6px 6px 3px !important; }
+        .admin-banner .art-book::before { left: 4px !important; right: 3px !important; top: 5px !important; bottom: 5px !important; }
+        .admin-banner .art-book::after { left: 9px !important; right: 6px !important; top: 18px !important; height: 1px !important; box-shadow: 0 5px 0 rgba(255,255,255,.28), 0 10px 0 rgba(255,255,255,.2), 0 26px 0 rgba(255,255,255,.15) !important; }
+        .admin-banner .art-book-a { left: 17px !important; bottom: 8px !important; }
+        .admin-banner .art-book-b { left: 43px !important; width: 36px !important; height: 98px !important; bottom: 13px !important; }
+        .admin-banner .art-book-c { left: 69px !important; bottom: 8px !important; }
+        .admin-banner .art-plant { right: 0 !important; top: 0 !important; font-size: 25px !important; }
+
         .stats-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; gap: 9px !important; }
         .stat-card { min-width: 0; padding: 12px !important; gap: 8px !important; }
         .stat-card span, .stat-card small { font-size: 10px !important; }
@@ -1324,6 +1567,38 @@ function App() {
         .book-grid { display: flex !important; flex-direction: column !important; align-items: stretch !important; overflow: visible !important; gap: 12px !important; padding: 4px 0 24px !important; margin: 0 !important; scroll-snap-type: none !important; }
         .book-grid > .book-tile { flex: 0 0 auto !important; width: 100% !important; min-width: 0 !important; height: 224px !important; min-height: 224px !important; display: flex !important; flex-direction: row !important; align-items: stretch !important; box-sizing: border-box !important; scroll-snap-align: none !important; }
         .book-cover { flex: 0 0 112px !important; width: 112px !important; min-width: 112px !important; min-height: 0 !important; height: auto !important; align-self: stretch !important; box-sizing: border-box !important; border-radius: 12px !important; margin: 8px !important; }
+        /* Saved Books uses a compact thumbnail and must not inherit catalog cover sizing. */
+        .book-cover.saved-book-cover {
+          position: relative !important;
+          display: block !important;
+          flex: 0 0 100% !important;
+          width: 100% !important;
+          min-width: 0 !important;
+          max-width: 100% !important;
+          height: 100% !important;
+          min-height: 0 !important;
+          max-height: 100% !important;
+          align-self: stretch !important;
+          margin: 0 !important;
+          padding: 0 !important;
+          overflow: hidden !important;
+          box-sizing: border-box !important;
+          border-radius: inherit !important;
+        }
+        .book-cover.saved-book-cover img {
+          position: absolute !important;
+          inset: 0 !important;
+          display: block !important;
+          width: 100% !important;
+          height: 100% !important;
+          min-width: 0 !important;
+          max-width: 100% !important;
+          object-fit: contain !important;
+          object-position: center center !important;
+          transform: none !important;
+          padding: 2px !important;
+          margin: 0 !important;
+        }
         /* The detail-modal cover must not inherit the 112px catalog-card sizing. */
         .book-cover.book-cover-detail {
           flex: 0 0 100% !important;
@@ -1409,8 +1684,8 @@ function App() {
           white-space: normal !important;
           overflow-wrap: anywhere !important;
           word-break: normal !important;
-          font-size: 13px !important;
-          line-height: 1.4 !important;
+          font-size: 11px !important;
+          line-height: 1.35 !important;
           color: #667085 !important;
           text-align: left !important;
         }
@@ -1440,6 +1715,67 @@ function App() {
         .book-about-modal { padding: 16px !important; align-items: flex-end !important; }
         .book-about-modal > section { border-radius: 22px 22px 0 0 !important; max-height: 86dvh !important; overflow-y: auto !important; }
       }
+      /* Refined desktop dashboard footer */
+      .dashboard-footer {
+        display: flex !important;
+        align-items: center !important;
+        justify-content: flex-start !important;
+        gap: 16px !important;
+        width: 100% !important;
+        min-height: 58px !important;
+        margin: 22px 0 0 !important;
+        padding: 12px 22px !important;
+        position: relative !important;
+        overflow: hidden !important;
+        box-sizing: border-box !important;
+        color: #eaf1f8 !important;
+        background: linear-gradient(112deg, #14283f 0%, #203e56 58%, #28515a 100%) !important;
+        border: 1px solid rgba(255,255,255,.12) !important;
+        border-radius: 12px 12px 0 0 !important;
+        box-shadow: 0 -5px 22px rgba(20,40,63,.08) !important;
+      }
+      .dashboard-footer::before {
+        content: "" !important;
+        position: absolute !important;
+        top: 0 !important;
+        left: 0 !important;
+        right: 0 !important;
+        height: 3px !important;
+        background: linear-gradient(90deg, #d8a83e, #f6dda0, #d8a83e) !important;
+      }
+      .dashboard-footer::after {
+        content: "" !important;
+        position: absolute !important;
+        width: 180px !important;
+        height: 180px !important;
+        right: -48px !important;
+        bottom: -122px !important;
+        border: 1px solid rgba(255,255,255,.10) !important;
+        border-radius: 50% !important;
+        box-shadow: 0 0 0 18px rgba(255,255,255,.025), 0 0 0 38px rgba(255,255,255,.02) !important;
+        pointer-events: none !important;
+      }
+      .dashboard-footer > span {
+        display: inline-flex !important;
+        align-items: center !important;
+        gap: 10px !important;
+        min-width: 0 !important;
+        position: relative !important;
+        z-index: 1 !important;
+        color: #c4d1df !important;
+        font-size: 11px !important;
+        letter-spacing: .01em !important;
+        line-height: 1.5 !important;
+      }
+      .dashboard-footer > span strong {
+        color: #fff !important;
+        font-size: 13px !important;
+        font-weight: 800 !important;
+        letter-spacing: .025em !important;
+      }
+      @media (max-width: 700px) {
+        .dashboard-footer { display: none !important; }
+      }
       @media (min-width: 701px) and (max-width: 1050px) {
         .app-topbar { gap: 16px !important; padding-left: 22px !important; padding-right: 22px !important; }
         .topbar-brand-mark { flex-basis: 42px !important; width: 42px !important; height: 42px !important; font-size: 22px !important; }
@@ -1455,7 +1791,99 @@ function App() {
         .app-topbar .eyebrow { font-size: 7px !important; letter-spacing: .045em; }
         .app-topbar h1 { font-size: 18px !important; }
       }
-      /* Final override: ensure all five mobile navigation buttons remain visible. */
+      .remember-me-option {
+        display: grid;
+        grid-template-columns: 18px 1fr;
+        align-items: center;
+        column-gap: 9px;
+        row-gap: 2px;
+        margin: 2px 0 8px;
+        color: #173b60;
+        font-size: 14px;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      .remember-me-option input {
+        grid-row: 1 / span 2;
+        width: 17px;
+        height: 17px;
+        margin: 0;
+        accent-color: #173b60;
+        cursor: pointer;
+      }
+      .remember-me-option small {
+        color: #71839a;
+        font-size: 12px;
+        font-weight: 400;
+      }
+      /* Mobile Settings layout: single-column cards inspired by the supplied phone reference. */
+      @media (max-width: 760px) {
+        .settings-page {
+          width: 100% !important;
+          max-width: 100% !important;
+          box-sizing: border-box !important;
+          padding: 12px 14px calc(92px + env(safe-area-inset-bottom)) !important;
+          margin: 0 auto !important;
+        }
+        .settings-shortcut-grid,
+        .settings-shortcut-grid.admin-shortcuts {
+          display: grid !important;
+          grid-template-columns: minmax(0, 1fr) !important;
+          gap: 10px !important;
+          width: 100% !important;
+        }
+        .settings-shortcut-grid > .settings-shortcut {
+          display: grid !important;
+          grid-template-columns: 46px minmax(0, 1fr) 16px !important;
+          align-items: center !important;
+          column-gap: 11px !important;
+          width: 100% !important;
+          min-height: 88px !important;
+          box-sizing: border-box !important;
+          padding: 12px 13px !important;
+          margin: 0 !important;
+          border-radius: 20px !important;
+          text-align: left !important;
+        }
+        .settings-shortcut-grid > .settings-shortcut .settings-shortcut-icon {
+          display: flex !important;
+          align-items: center !important;
+          justify-content: center !important;
+          width: 46px !important;
+          height: 46px !important;
+          min-width: 46px !important;
+          border-radius: 14px !important;
+          font-size: 22px !important;
+        }
+        .settings-shortcut-grid > .settings-shortcut > span:nth-child(2) {
+          display: flex !important;
+          flex-direction: column !important;
+          min-width: 0 !important;
+          gap: 5px !important;
+        }
+        .settings-shortcut-grid > .settings-shortcut strong {
+          display: block !important;
+          font-size: 14px !important;
+          line-height: 1.3 !important;
+          overflow-wrap: anywhere !important;
+        }
+        .settings-shortcut-grid > .settings-shortcut small {
+          display: block !important;
+          font-size: 13px !important;
+          line-height: 1.4 !important;
+          white-space: normal !important;
+          overflow-wrap: anywhere !important;
+        }
+        .settings-shortcut-grid > .settings-shortcut > b {
+          justify-self: end !important;
+          font-size: 21px !important;
+        }
+        .settings-section-title {
+          margin-bottom: 16px !important;
+        }
+      }
+
+      /* Final override: fit the five mobile navigation buttons evenly. */
       @media (max-width: 760px) {
         .app-topbar .topbar-logout { display: none !important; }
         .libtrack-mobile-bottom-nav {
@@ -1477,13 +1905,78 @@ function App() {
           white-space: nowrap !important;
         }
       }
+
+      /* Final admin hero refinement: balanced typography and a clean framed edge. */
+      .welcome-banner.admin-banner {
+        min-height: 176px !important;
+        padding: 22px clamp(22px, 3.4vw, 42px) !important;
+        border: 1px solid rgba(218, 232, 242, .24) !important;
+        border-radius: 22px !important;
+        box-shadow: 0 10px 26px rgba(9, 31, 51, .13), inset 0 1px 0 rgba(255,255,255,.08) !important;
+      }
+      .admin-banner .gold-kicker {
+        font-size: 11px !important;
+        letter-spacing: .14em !important;
+        margin-bottom: 12px !important;
+      }
+      .admin-banner .welcome-copy h2 {
+        font-size: clamp(25px, 2.15vw, 32px) !important;
+        line-height: 1.16 !important;
+        letter-spacing: -.025em !important;
+        margin: 0 0 9px !important;
+      }
+      .admin-banner .welcome-copy p {
+        font-size: clamp(13px, 1vw, 15px) !important;
+        line-height: 1.5 !important;
+        max-width: 560px !important;
+      }
+      .admin-banner .banner-art {
+        flex-basis: clamp(190px, 22vw, 250px) !important;
+        width: clamp(190px, 22vw, 250px) !important;
+        height: 166px !important;
+      }
+      .admin-banner .art-circle {
+        width: 164px !important;
+        height: 164px !important;
+      }
+      @media (max-width: 640px) {
+        .welcome-banner.admin-banner {
+          min-height: 142px !important;
+          padding: 17px 14px !important;
+          gap: 4px !important;
+          border-radius: 16px !important;
+        }
+        .admin-banner .gold-kicker {
+          font-size: 8px !important;
+          letter-spacing: .1em !important;
+          margin-bottom: 9px !important;
+        }
+        .admin-banner .welcome-copy h2 {
+          font-size: clamp(21px, 6vw, 26px) !important;
+          margin-bottom: 7px !important;
+        }
+        .admin-banner .welcome-copy p {
+          font-size: 10px !important;
+          line-height: 1.4 !important;
+        }
+        .admin-banner .banner-art {
+          flex: 0 0 104px !important;
+          width: 104px !important;
+          height: 116px !important;
+          margin: 0 -5px 0 -8px !important;
+        }
+        .admin-banner .art-circle {
+          width: 102px !important;
+          height: 102px !important;
+        }
+      }
     `;
-    document.head.appendChild(style);
+    if (!existingStyle) document.head.appendChild(style);
   }, []);
 
   const [token, setToken] = useState(
 
-    () => sessionStorage.getItem(TOKEN_KEY) || '',
+    () => localStorage.getItem(TOKEN_KEY) || sessionStorage.getItem(TOKEN_KEY) || '',
 
   );
 
@@ -1492,6 +1985,8 @@ function App() {
   const [userLoading, setUserLoading] = useState(false);
 
   const [isRegister, setIsRegister] = useState(false);
+
+  const [registerType, setRegisterType] = useState<'student' | 'faculty'>('student');
 
   const [name, setName] = useState('');
 
@@ -1507,7 +2002,15 @@ function App() {
 
   const [username, setUsername] = useState('');
 
+  const [signupPhoto, setSignupPhoto] = useState<File | null>(null);
+  const [signupPhotoPreview, setSignupPhotoPreview] = useState('');
+  const [profilePhotoSaving, setProfilePhotoSaving] = useState(false);
+  const [profilePhotoPreview, setProfilePhotoPreview] = useState<{ url: string; name: string } | null>(null);
+
   const [password, setPassword] = useState('');
+
+  // Remember Me is enabled by default; users can turn it off for this login.
+  const [rememberMe, setRememberMe] = useState(true);
 
   const [confirmPassword, setConfirmPassword] = useState('');
 
@@ -1515,9 +2018,89 @@ function App() {
 
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
+  const [currentAccountPassword, setCurrentAccountPassword] = useState('');
+  const [newAccountPassword, setNewAccountPassword] = useState('');
+  const [confirmAccountPassword, setConfirmAccountPassword] = useState('');
+  const [showCurrentAccountPassword, setShowCurrentAccountPassword] = useState(false);
+  const [showNewAccountPassword, setShowNewAccountPassword] = useState(false);
+  const [showConfirmAccountPassword, setShowConfirmAccountPassword] = useState(false);
+  const [changePasswordSaving, setChangePasswordSaving] = useState(false);
+  const [changePasswordMessage, setChangePasswordMessage] = useState('');
+  const [problemCategory, setProblemCategory] = useState('Account or profile');
+  const [problemDescription, setProblemDescription] = useState('');
+  const [problemReportMessage, setProblemReportMessage] = useState('');
+  const [problemReportSubmitting, setProblemReportSubmitting] = useState(false);
+  const [adminProblemReports, setAdminProblemReports] = useState<any[]>([]);
+  const [adminProblemReportsLoading, setAdminProblemReportsLoading] = useState(false);
+  const [adminProblemReportError, setAdminProblemReportError] = useState('');
+  const [savedBookIds, setSavedBookIds] = useState<number[]>([]);
+  const [preferences, setPreferences] = useState({ borrowingUpdates: true, libraryAnnouncements: true, dueDateReminders: true });
+
   const [page, setPage] = useState<Page>('home');
+  useEffect(() => {
+    if (!user?.id) {
+      setSavedBookIds([]);
+      return;
+    }
+    const savedKey = `libtrack_saved_books_${user.id}`;
+    const preferenceKey = `libtrack_app_preferences_${user.id}`;
+    try {
+      const saved = JSON.parse(localStorage.getItem(savedKey) || '[]');
+      setSavedBookIds(Array.isArray(saved) ? saved.filter((id) => Number.isFinite(Number(id))).map(Number) : []);
+      const storedPreferences = JSON.parse(localStorage.getItem(preferenceKey) || '{}');
+      setPreferences({
+        borrowingUpdates: storedPreferences.borrowingUpdates !== false,
+        libraryAnnouncements: storedPreferences.libraryAnnouncements !== false,
+        dueDateReminders: storedPreferences.dueDateReminders !== false,
+      });
+    } catch {
+      setSavedBookIds([]);
+      setPreferences({ borrowingUpdates: true, libraryAnnouncements: true, dueDateReminders: true });
+    }
+  }, [user?.id]);
+
+  function toggleSavedBook(bookId: number) {
+    if (!user?.id) return;
+    setSavedBookIds((current) => {
+      const next = current.includes(bookId) ? current.filter((id) => id !== bookId) : [...current, bookId];
+      localStorage.setItem(`libtrack_saved_books_${user.id}`, JSON.stringify(next));
+      return next;
+    });
+  }
+
+  function updateAppPreference(key: keyof typeof preferences, value: boolean) {
+    if (!user?.id) return;
+    setPreferences((current) => {
+      const next = { ...current, [key]: value };
+      localStorage.setItem(`libtrack_app_preferences_${user.id}`, JSON.stringify(next));
+      return next;
+    });
+  }
+
   const pageHistoryRef = useRef<Page[]>([]);
   const appContentRef = useRef<any>(null);
+
+  // Support the device/browser Back action using LibTrack's in-app page history.
+  useEffect(() => {
+    const handleDeviceBack = () => {
+      const previousPage = pageHistoryRef.current.pop();
+      if (previousPage) {
+        setPage(previousPage);
+        if (previousPage === 'research') {
+          setResearchView('collections');
+          setSelectedResearchCourse('');
+          setSelectedResearchId(null);
+          setResearchQuery('');
+        }
+      } else if (page !== 'home') {
+        setPage('home');
+      }
+      setError('');
+      setNotice('');
+    };
+    window.addEventListener('popstate', handleDeviceBack);
+    return () => window.removeEventListener('popstate', handleDeviceBack);
+  }, [page]);
 
   const [researchQuery, setResearchQuery] = useState('');
 
@@ -1525,9 +2108,19 @@ function App() {
   const [selectedResearchCourse, setSelectedResearchCourse] = useState<string>('');
   const [researchView, setResearchView] = useState<ResearchView>('collections');
 
+  const [additionalCourses, setAdditionalCourses] = useState<string[]>([]);
   const [researchItems, setResearchItems] = useState<ResearchMaterial[]>([]);
 
   const [researchLoading, setResearchLoading] = useState(false);
+  const [researchCollectionCovers, setResearchCollectionCovers] = useState<Record<string, string>>({});
+  const [researchCollectionCoverUploading, setResearchCollectionCoverUploading] = useState<string | null>(null);
+  const [ebookCollectionCovers, setEbookCollectionCovers] = useState<Record<string, string>>({});
+  const [ebookCollectionCoverUploading, setEbookCollectionCoverUploading] = useState<string | null>(null);
+  const ebookCollectionCoverInputRef = useRef<HTMLInputElement | null>(null);
+  const ebookCollectionCoverTargetRef = useRef<string | null>(null);
+  const newCourseCoverTargetRef = useRef<string | null>(null);
+  const researchCollectionCoverInputRef = useRef<HTMLInputElement | null>(null);
+  const researchCollectionCoverTargetRef = useRef<string | null>(null);
 
   const [ebooks, setEbooks] = useState<EBook[]>([]);
   const [ebooksLoading, setEbooksLoading] = useState(false);
@@ -1545,6 +2138,9 @@ function App() {
   const [selectedEbookSubject, setSelectedEbookSubject] = useState<string | null>(null);
   const ebookPdfInputRef = useRef<HTMLInputElement | null>(null);
   const ebookZipInputRef = useRef<HTMLInputElement | null>(null);
+  const ebookCoverInputRef = useRef<HTMLInputElement | null>(null);
+  const ebookCoverTargetRef = useRef<string | null>(null);
+  const [ebookCoverUploadingId, setEbookCoverUploadingId] = useState<string | null>(null);
   const [ebookUploading, setEbookUploading] = useState(false);
   const [pdfUploadingResearchId, setPdfUploadingResearchId] = useState<number | null>(null);
   const researchPdfInputRef = useRef<HTMLInputElement | null>(null);
@@ -1570,10 +2166,28 @@ function App() {
   const [selectedCategory, setSelectedCategory] = useState('');
 
   const [accountQuery, setAccountQuery] = useState('');
+  const [selectedAccountGroup, setSelectedAccountGroup] = useState('BSIT');
 
   const [deletingAccountId, setDeletingAccountId] = useState<number | null>(null);
 
+  const [editingAccount, setEditingAccount] = useState<Account | null>(null);
+  const [expandedStudentId, setExpandedStudentId] = useState<number | null>(null);
+  const [accountEditDraft, setAccountEditDraft] = useState({ full_name: '', email: '', username: '', student_id: '', course: '', year: '', section: '', role: 'student', active: true });
+  const [accountEditSaving, setAccountEditSaving] = useState(false);
+
+  const [inventoryTab, setInventoryTab] = useState<'books' | 'research' | 'ebooks'>('books');
+  const [inventoryQuery, setInventoryQuery] = useState('');
+  const [inventoryLoading, setInventoryLoading] = useState(false);
+  const [inventoryError, setInventoryError] = useState('');
+
   const [books, setBooks] = useState<Book[]>([]);
+  const [mostBorrowedBooks, setMostBorrowedBooks] = useState<MostBorrowedBook[]>([]);
+  const [mostBorrowingStudents, setMostBorrowingStudents] = useState<MostBorrowingStudent[]>([]);
+  const [borrowingStats, setBorrowingStats] = useState<any>(null);
+  const [borrowingStatsLoading, setBorrowingStatsLoading] = useState(false);
+  const [borrowingStatsError, setBorrowingStatsError] = useState('');
+  const [borrowingStatsSemester, setBorrowingStatsSemester] = useState<'all' | '1st' | '2nd'>('all');
+
   const [selectedBook, setSelectedBook] = useState<Book | null>(null);
 
   const [accounts, setAccounts] = useState<Account[]>([]);
@@ -1581,24 +2195,85 @@ function App() {
   const [loginSessions, setLoginSessions] = useState<LoginSession[]>([]);
 
   const [borrowings, setBorrowings] = useState<Borrowing[]>([]);
+  const [lostBookCases, setLostBookCases] = useState<LostBookCase[]>([]);
+  const [lostCasesLoading, setLostCasesLoading] = useState(false);
+  const [lostBookDialog, setLostBookDialog] = useState<{
+    mode: 'report' | 'resolve'; record?: Borrowing; caseType?: 'lost' | 'damaged';
+    item?: LostBookCase; resolution?: 'paid' | 'replaced';
+  } | null>(null);
+  const [receiptPreviewCase, setReceiptPreviewCase] = useState<LostBookCase | null>(null);
+  const [receiptAttachmentUrl, setReceiptAttachmentUrl] = useState<string | null>(null);
+  const [receiptAttachmentLoading, setReceiptAttachmentLoading] = useState(false);
+  const [receiptReuploadLoading, setReceiptReuploadLoading] = useState(false);
+  const [lostBookMarketValue, setLostBookMarketValue] = useState('0');
+  const [lostBookAdditionalFine, setLostBookAdditionalFine] = useState('0');
+  const [lostBookNote, setLostBookNote] = useState('');
+  const [lostBookReceiptNumber, setLostBookReceiptNumber] = useState('');
+  const [lostBookAmountPaid, setLostBookAmountPaid] = useState('');
+  const [lostBookPaymentDate, setLostBookPaymentDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [lostBookPaymentMethod, setLostBookPaymentMethod] = useState('Cash');
+  const [lostBookReplacementTitle, setLostBookReplacementTitle] = useState('');
+  const [lostBookReplacementDate, setLostBookReplacementDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [lostBookReceivedBy, setLostBookReceivedBy] = useState('');
+  const [lostBookReceiptFile, setLostBookReceiptFile] = useState<File | null>(null);
+
+
 
   const [borrowingsLoading, setBorrowingsLoading] = useState(false);
 
   const [borrowingsError, setBorrowingsError] = useState('');
 
   const [showDueNotifications, setShowDueNotifications] = useState(false);
+  const [studentNotifications, setStudentNotifications] = useState<UserNotification[]>([]);
+  const [selectedStudentNotification, setSelectedStudentNotification] = useState<UserNotification | null>(null);
+  const [studentNotificationsLoading, setStudentNotificationsLoading] = useState(false);
+  const seenStudentNotificationIdsRef = useRef<Set<number>>(new Set());
+  const studentNotificationsInitializedRef = useRef(false);
+  const studentNotificationPopupBusyRef = useRef(false);
+
 
   const [borrowRequestConfirmation, setBorrowRequestConfirmation] = useState<Book | null>(null);
   const [pickupConfirmation, setPickupConfirmation] = useState<Borrowing | null>(null);
   const [approvalDueDate, setApprovalDueDate] = useState(() => {
     const suggestedDate = new Date();
-    suggestedDate.setDate(suggestedDate.getDate() + 14);
+    suggestedDate.setDate(suggestedDate.getDate() + 7);
     return `${suggestedDate.getFullYear()}-${String(suggestedDate.getMonth() + 1).padStart(2, '0')}-${String(suggestedDate.getDate()).padStart(2, '0')}`;
   });
 
   const [returnConfirmation, setReturnConfirmation] = useState<Borrowing | null>(null);
 
   const [error, setError] = useState('');
+  const [weekendNoticeEnabled, setWeekendNoticeEnabled] = useState(true);
+  const [weekendNoticeTime, setWeekendNoticeTime] = useState('07:00');
+  const [weekendNoticeMessage, setWeekendNoticeMessage] = useState('Book borrowing is unavailable on Saturdays and Sundays. Please visit the library during regular operating days (Monday-Friday).');
+  const [weekendNoticeSaving, setWeekendNoticeSaving] = useState(false);
+  const [weekendNoticeSaveMessage, setWeekendNoticeSaveMessage] = useState('');
+  const [showAdminNoticePreview, setShowAdminNoticePreview] = useState(false);
+  const [apiHealthStatus, setApiHealthStatus] = useState<'unknown' | 'checking' | 'online' | 'offline'>('unknown');
+  const [apiHealthMessage, setApiHealthMessage] = useState('');
+  const [showWeekendNoticePopup, setShowWeekendNoticePopup] = useState(false);
+  const [librarySchedule, setLibrarySchedule] = useState<Record<string, { closed: boolean; open: string; close: string }>>({
+    Monday: { closed: false, open: '12:00', close: '22:00' },
+    Tuesday: { closed: false, open: '12:00', close: '22:00' },
+    Wednesday: { closed: false, open: '12:00', close: '22:00' },
+    Thursday: { closed: false, open: '12:00', close: '22:00' },
+    Friday: { closed: false, open: '12:00', close: '22:00' },
+    Saturday: { closed: true, open: '08:00', close: '12:00' },
+    Sunday: { closed: true, open: '08:00', close: '12:00' },
+  });
+  const [borrowingSchedule, setBorrowingSchedule] = useState({
+    enabled: true,
+    days: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'],
+    open_time: '08:00',
+    close_time: '17:00',
+    message: 'Book borrowing is currently unavailable. Please check the library borrowing schedule.',
+  });
+  const [borrowingScheduleSaving, setBorrowingScheduleSaving] = useState(false);
+  const [borrowingScheduleMessage, setBorrowingScheduleMessage] = useState('');
+  const [libraryScheduleSaving, setLibraryScheduleSaving] = useState(false);
+  const [libraryScheduleMessage, setLibraryScheduleMessage] = useState('');
+  const bookAvailabilitySnapshotRef = useRef<Map<number, number> | null>(null);
+
 
   const [notice, setNotice] = useState('');
 
@@ -1618,7 +2293,10 @@ function App() {
 
   const normalizedUserRole = String(user?.role || '').trim().toLowerCase();
   const isAdmin = normalizedUserRole === 'admin';
-  const isStudent = normalizedUserRole === 'student';
+  const isFaculty = normalizedUserRole === 'faculty';
+  const isStudent = normalizedUserRole === 'student' || isFaculty;
+  const isStudentAccount = normalizedUserRole === 'student';
+  const accountRoleLabel = isAdmin ? 'ADMINISTRATOR' : isFaculty ? 'FACULTY' : 'STUDENT';
 
   // ---------------------------------------------------------
 
@@ -1648,13 +2326,25 @@ function App() {
 
       if (isRegister) {
 
-        const response = await fetch(`${API}/auth/register`, {
+        const profilePhotoDataUrl = signupPhoto ? await fileToDataUrl(signupPhoto) : null;
+        const response = await fetch(`${API}/${registerType === 'faculty' ? 'auth/register-faculty' : 'auth/register'}`, {
 
           method: 'POST',
 
           headers: { 'Content-Type': 'application/json' },
 
-          body: JSON.stringify({
+          body: JSON.stringify(registerType === 'faculty' ? {
+
+            full_name: name.trim(),
+
+            email: email.trim(),
+
+            username: username.trim(),
+
+            password,
+            profile_photo_data_url: profilePhotoDataUrl,
+
+          } : {
 
             full_name: name.trim(),
 
@@ -1671,6 +2361,7 @@ function App() {
             username: username.trim(),
 
             password,
+            profile_photo_data_url: profilePhotoDataUrl,
 
           }),
 
@@ -1680,13 +2371,13 @@ function App() {
 
         setIsRegister(false);
 
-        setName(''); setStudentId(''); setCourse(''); setYear(''); setSection(''); setEmail(''); setUsername('');
+        setName(''); setStudentId(''); setCourse(''); setYear(''); setSection(''); setEmail(''); setUsername(''); setSignupPhoto(null); setSignupPhotoPreview('');
 
         setPassword(''); setConfirmPassword('');
 
         setShowPassword(false); setShowConfirmPassword(false);
 
-        setNotice('Account created successfully. Please log in.');
+        setNotice(`${registerType === 'faculty' ? 'Faculty' : 'Student'} account created successfully. Please log in.`);
 
       } else {
 
@@ -1714,7 +2405,14 @@ function App() {
 
         }
 
-        sessionStorage.setItem(TOKEN_KEY, data.access_token);
+        // Keep the token only for this browser session unless Remember Me is selected.
+        if (rememberMe) {
+          localStorage.setItem(TOKEN_KEY, data.access_token);
+          sessionStorage.removeItem(TOKEN_KEY);
+        } else {
+          sessionStorage.setItem(TOKEN_KEY, data.access_token);
+          localStorage.removeItem(TOKEN_KEY);
+        }
 
         setToken(data.access_token);
 
@@ -1739,6 +2437,7 @@ function App() {
           year: data.year,
 
           section: data.section,
+          profile_photo_url: data.profile_photo_url,
 
         });
 
@@ -1795,6 +2494,7 @@ function App() {
     }
 
     sessionStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(TOKEN_KEY);
 
     setToken('');
 
@@ -1901,6 +2601,7 @@ function App() {
             year: data.year,
 
             section: data.section,
+            profile_photo_url: data.profile_photo_url,
 
           });
 
@@ -2139,6 +2840,117 @@ function App() {
   }, [token, isAdmin]);
 
   // ---------------------------------------------------------
+  // STUDENT: WATCH FOR BOOKS BORROWED BY OTHER USERS WITHOUT A PAGE REFRESH
+  // Poll the catalog and notify when an available-copy count decreases.
+  // ---------------------------------------------------------
+
+  useEffect(() => {
+    if (!token || !isStudent) {
+      bookAvailabilitySnapshotRef.current = null;
+      return;
+    }
+
+    let cancelled = false;
+    const checkBookAvailability = async () => {
+      try {
+        const response = await fetch(`${API}/books`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const data = await readResponse(response);
+        if (cancelled || !Array.isArray(data)) return;
+
+        const latestBooks = data as Book[];
+        const latestSnapshot = new Map<number, number>(
+          latestBooks.map((book) => [Number(book.id), Number(book.available_copies) || 0] as [number, number])
+        );
+        const previousSnapshot = bookAvailabilitySnapshotRef.current;
+
+        bookAvailabilitySnapshotRef.current = latestSnapshot;
+        setBooks((current) => {
+          const currentById = new Map(current.map((book) => [book.id, book]));
+          return latestBooks.map((book) => ({ ...currentById.get(book.id), ...book }));
+        });
+      } catch (err) {
+        // Keep the current catalog visible; the next poll will retry.
+        console.warn('Could not check book availability updates:', err);
+      }
+    };
+
+    void checkBookAvailability();
+    // Refresh student catalog frequently so an Admin approval appears without manual reload.
+    const timer = window.setInterval(() => { void checkBookAvailability(); }, 2000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [token, isStudent]);
+
+  // ---------------------------------------------------------
+  // ADMIN HOME: STUDENTS WITH THE MOST BORROWINGS
+  // Pending requests are excluded; approved and returned transactions count.
+  // ---------------------------------------------------------
+
+  useEffect(() => {
+    if (!token || !isAdmin || page !== 'home') return;
+
+    let cancelled = false;
+    const loadMostBorrowingStudents = async () => {
+      try {
+        const response = await fetch(`${API}/reports/most-borrowing-students?limit=10`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const data = await readResponse(response);
+        if (!cancelled) setMostBorrowingStudents(Array.isArray(data) ? data : []);
+      } catch (err) {
+        console.warn('Could not load most-borrowing students:', err);
+      }
+    };
+
+    void loadMostBorrowingStudents();
+    const timer = window.setInterval(() => void loadMostBorrowingStudents(), 15000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [token, isAdmin, page]);
+
+  // ---------------------------------------------------------
+  // HOME: MOST BORROWED BOOKS
+  // Counts only approved borrowing transactions (borrowed/returned).
+  // ---------------------------------------------------------
+
+  useEffect(() => {
+    if (!token || page !== 'home') return;
+
+    let cancelled = false;
+
+    const loadMostBorrowedBooks = async () => {
+      try {
+        const response = await fetch(`${API}/reports/most-borrowed?limit=6`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const data = await readResponse(response);
+        if (!cancelled) {
+          setMostBorrowedBooks(Array.isArray(data) ? data : []);
+        }
+      } catch (err) {
+        // Keep the Home page usable if the ranking endpoint is temporarily unavailable.
+        console.warn('Could not load most-borrowed books:', err);
+      }
+    };
+
+    void loadMostBorrowedBooks();
+    const timer = window.setInterval(() => {
+      void loadMostBorrowedBooks();
+    }, 15000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [token, page]);
+
+  // ---------------------------------------------------------
 
   // BORROWING ACTIVITY / STUDENT BORROWING HISTORY
 
@@ -2200,6 +3012,7 @@ function App() {
     void loadBorrowings();
 
     const timer = window.setInterval(() => { void loadBorrowings(); }, 10000);
+    if (isAdmin) void loadLostBookCases();
 
     return () => {
 
@@ -2289,6 +3102,228 @@ function App() {
 
   }, [token, isAdmin]);
 
+  // Keep the borrowing schedule synchronized across separate devices/sessions.
+  // Admin changes are saved on the API; student/faculty pages pick them up
+  // automatically without requiring a refresh or a new sign-in.
+  useEffect(() => {
+    if (!token) return;
+    let cancelled = false;
+
+    const refreshBorrowingSchedule = async () => {
+      try {
+        const response = await fetch(`${API}/settings/borrowing-schedule`, {
+          headers: { Authorization: `Bearer ${token}` },
+          cache: 'no-store',
+        });
+        const data = await readResponse(response);
+        if (!cancelled && data?.schedule) {
+          setBorrowingSchedule((current) => ({ ...current, ...data.schedule }));
+        }
+      } catch (err) {
+        if (!cancelled) console.error('Could not refresh borrowing schedule:', err);
+      }
+    };
+
+    void refreshBorrowingSchedule();
+    const refreshTimer = window.setInterval(() => {
+      void refreshBorrowingSchedule();
+    }, 5000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(refreshTimer);
+    };
+  }, [token]);
+
+  useEffect(() => {
+    if (!token) return;
+    let cancelled = false;
+    fetch(`${API}/settings/library-schedule`, { headers: { Authorization: `Bearer ${token}` } })
+      .then(readResponse)
+      .then((data) => { if (!cancelled && data?.schedule) setLibrarySchedule((current) => ({ ...current, ...data.schedule })); })
+      .catch((err) => { if (!cancelled) console.error('Could not load library schedule:', err); });
+    return () => { cancelled = true; };
+  }, [token]);
+
+  async function saveBorrowingSchedule() {
+    if (!token || !isAdmin) {
+      setBorrowingScheduleMessage('Only an Admin can save the borrowing schedule.');
+      return;
+    }
+    setBorrowingScheduleSaving(true);
+    setBorrowingScheduleMessage('Saving borrowing schedule...');
+    try {
+      const response = await fetch(`${API}/settings/borrowing-schedule`, {
+        method: 'PUT',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(borrowingSchedule),
+      });
+      const data = await readResponse(response);
+      if (!data?.schedule) throw new Error('The server did not return the saved borrowing schedule.');
+      setBorrowingSchedule((current) => ({ ...current, ...data.schedule }));
+      setBorrowingScheduleMessage('Borrowing schedule saved successfully.');
+    } catch (err) {
+      setBorrowingScheduleMessage(`Could not save borrowing schedule: ${getError(err)}`);
+    } finally {
+      setBorrowingScheduleSaving(false);
+    }
+  }
+
+  function isBorrowingScheduleOpenNow() {
+    const parts = new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'Asia/Manila', weekday: 'long', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+    }).formatToParts(new Date()).reduce((acc: Record<string, string>, part) => {
+      acc[part.type] = part.value;
+      return acc;
+    }, {});
+    const currentTime = `${parts.hour}:${parts.minute}`;
+    return borrowingSchedule.enabled
+      && borrowingSchedule.days.includes(parts.weekday)
+      && currentTime >= borrowingSchedule.open_time
+      && currentTime < borrowingSchedule.close_time;
+  }
+
+  async function saveLibrarySchedule() {
+    if (!token) {
+      setLibraryScheduleMessage('Hindi ma-save: walang active login session. Mag-sign in ulit bilang Admin.');
+      return;
+    }
+
+    setLibraryScheduleSaving(true);
+    setLibraryScheduleMessage('Saving library schedule...');
+    try {
+      const response = await fetch(`${API}/settings/library-schedule`, {
+        method: 'PUT',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ schedule: librarySchedule }),
+      });
+      const data = await readResponse(response);
+
+      if (!data?.schedule) {
+        throw new Error('Walang schedule data na ibinalik ng server. Hindi makumpirma ang pag-save.');
+      }
+
+      setLibrarySchedule((current) => ({ ...current, ...data.schedule }));
+      setLibraryScheduleMessage('Library schedule saved successfully.');
+    } catch (err) {
+      setLibraryScheduleMessage(`Hindi na-save ang Library Schedule: ${getError(err)}`);
+    } finally {
+      setLibraryScheduleSaving(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!token) return;
+    let cancelled = false;
+    fetch(`${API}/settings/weekend-notice`, { headers: { Authorization: `Bearer ${token}` } })
+      .then(readResponse)
+      .then((data) => {
+        if (cancelled) return;
+        setWeekendNoticeEnabled(Boolean(data.enabled));
+        setWeekendNoticeTime(data.time || '07:00');
+        setWeekendNoticeMessage(data.message || 'Book borrowing is unavailable on Saturdays and Sundays. Please visit the library during regular operating days (Monday-Friday).');
+      })
+      .catch((err) => { if (!cancelled) console.error('Could not load weekend notice settings:', err); });
+    return () => { cancelled = true; };
+  }, [token]);
+
+  useEffect(() => {
+    if (!token || !user || isAdmin || !weekendNoticeEnabled) {
+      setShowWeekendNoticePopup(false);
+      return;
+    }
+    const checkSchedule = () => {
+      const now = new Date();
+      const parts = new Intl.DateTimeFormat('en-GB', {
+        timeZone: 'Asia/Manila', weekday: 'short', year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+      }).formatToParts(now).reduce((acc: Record<string, string>, part) => {
+        acc[part.type] = part.value; return acc;
+      }, {});
+      if (parts.weekday !== 'Sat' && parts.weekday !== 'Sun') { setShowWeekendNoticePopup(false); return; }
+      const currentTime = `${parts.hour}:${parts.minute}`;
+      const dayKey = `${parts.year}-${parts.month}-${parts.day}`;
+      const shownKey = `libtrack_weekend_notice_shown_${dayKey}`;
+      if (currentTime >= weekendNoticeTime && localStorage.getItem(shownKey) !== '1') {
+        localStorage.setItem(shownKey, '1');
+        setShowWeekendNoticePopup(true);
+      }
+    };
+    checkSchedule();
+    const timer = window.setInterval(checkSchedule, 15000);
+    return () => window.clearInterval(timer);
+  }, [token, user, isAdmin, weekendNoticeEnabled, weekendNoticeTime]);
+
+  async function checkAdminApiHealth() {
+    setApiHealthStatus('checking');
+    setApiHealthMessage('Checking backend connection...');
+    try {
+      const response = await fetch(`${API}/health`, {
+        method: 'GET',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!response.ok) throw new Error(`Backend returned HTTP ${response.status}.`);
+      await response.json().catch(() => null);
+      setApiHealthStatus('online');
+      setApiHealthMessage('Backend API is reachable.');
+    } catch (err) {
+      setApiHealthStatus('offline');
+      setApiHealthMessage(`Backend API is not reachable: ${getError(err)}`);
+    }
+  }
+
+  async function saveWeekendNoticeSettings() {
+    if (!token) {
+      setWeekendNoticeSaveMessage('Hindi ma-save: nawawala ang login session. Mag-sign in ulit.');
+      return;
+    }
+
+    setWeekendNoticeSaving(true);
+    setWeekendNoticeSaveMessage('Saving weekend notice settings...');
+    try {
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => controller.abort(), 15000);
+      let response: Response;
+      try {
+        response = await fetch(`${API}/settings/weekend-notice`, {
+          method: 'PUT',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            enabled: weekendNoticeEnabled,
+            time: weekendNoticeTime,
+            message: weekendNoticeMessage.trim(),
+          }),
+          signal: controller.signal,
+        });
+      } finally {
+        window.clearTimeout(timeout);
+      }
+
+      const data = await readResponse(response);
+      if (typeof data.enabled !== 'boolean' || !data.time || typeof data.message !== 'string') {
+        throw new Error('Hindi kumpleto ang response ng server. Pakisuri ang weekend-notice API.');
+      }
+
+      setWeekendNoticeEnabled(data.enabled);
+      setWeekendNoticeTime(data.time);
+      setWeekendNoticeMessage(data.message);
+      setWeekendNoticeSaveMessage('Weekend borrowing notice settings saved successfully.');
+    } catch (err) {
+      const message = err instanceof Error && err.name === 'AbortError'
+        ? 'Nag-timeout ang request. Tingnan kung tumatakbo ang backend.'
+        : getError(err);
+      setWeekendNoticeSaveMessage(`Hindi na-save ang Weekend Borrowing Notice: ${message}`);
+    } finally {
+      setWeekendNoticeSaving(false);
+    }
+  }
+
   // ---------------------------------------------------------
 
   // BOOK MANAGEMENT
@@ -2297,8 +3332,8 @@ function App() {
 
   // STUDENT: FIRST ASK FOR CONFIRMATION, THEN SUBMIT THE BORROWING REQUEST.
   function borrowBook(book: Book) {
-    if (isPhilippineWeekend()) {
-      setError('Book borrowing is not available on Saturdays and Sundays. Please visit the library during regular operating days (Monday-Friday).');
+    if (!isBorrowingScheduleOpenNow()) {
+      setError(borrowingSchedule.message || 'Book borrowing is currently unavailable. Please check the library borrowing schedule.');
       return;
     }
     if (!token || isAdmin) {
@@ -2357,7 +3392,28 @@ function App() {
       if (err instanceof Error && err.name === 'AbortError') {
         setError(`The borrowing request timed out after 15 seconds. Please check that the LibTrack backend is running and that VITE_API_URL is correct (${API}), then try again.`);
       } else {
-        setError(`Could not submit the borrowing request: ${getError(err)}`);
+        const borrowError = getError(err);
+        const normalizedBorrowError = borrowError.toLowerCase();
+        const isLostDamagedRestriction =
+          normalizedBorrowError.includes('borrowing privileges are suspended') ||
+          normalizedBorrowError.includes('unsettled lost/damaged book case') ||
+          normalizedBorrowError.includes('unsettled lost or damaged book case');
+
+        if (isLostDamagedRestriction) {
+          setError('');
+          setBorrowRequestConfirmation(null);
+          const restrictionAlert = await alertController.create({
+            header: 'Borrowing Restricted',
+            message:
+              'Your library borrowing privileges are temporarily suspended because you have an unsettled lost or damaged book case. Please visit or contact the Librarian to settle your case before borrowing another book.',
+            buttons: [{ text: 'Okay', role: 'confirm' }],
+            cssClass: 'libtrack-alert',
+            backdropDismiss: true,
+          });
+          await restrictionAlert.present();
+        } else {
+          setError(`Could not submit the borrowing request: ${borrowError}`);
+        }
       }
     } finally {
       window.clearTimeout(requestTimeout);
@@ -2367,8 +3423,18 @@ function App() {
 
   async function approveBorrowing(record: Borrowing, dueDate: string) {
     if (!token || !isAdmin) return;
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(dueDate) || dueDate < new Date().toISOString().slice(0, 10)) {
-      setError('Please choose a valid return due date (today or a future date).');
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const maxDueDate = new Date(today);
+    maxDueDate.setDate(maxDueDate.getDate() + 7);
+    const formatLocalDate = (value: Date) =>
+      `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}`;
+    if (
+      !/^\d{4}-\d{2}-\d{2}$/.test(dueDate) ||
+      dueDate < formatLocalDate(today) ||
+      dueDate > formatLocalDate(maxDueDate)
+    ) {
+      setError('Please choose a return due date within the next 7 days.');
       return;
     }
     setLoading(true);
@@ -2420,6 +3486,463 @@ function App() {
     }
   }
 
+  async function loadStudentNotifications() {
+    if (!token || isAdmin) return;
+    setStudentNotificationsLoading(true);
+    try {
+      const response = await fetch(`${API}/notifications`, { headers: { Authorization: `Bearer ${token}` } });
+      const data = await readResponse(response);
+      const rows: UserNotification[] = Array.isArray(data) ? data : [];
+
+      // On the first load, show the newest unread case notice once.
+      // On later polls, show a popup only for notifications that just arrived.
+      const firstLoad = !studentNotificationsInitializedRef.current;
+      const newRows = rows.filter((item) => !seenStudentNotificationIdsRef.current.has(item.id));
+      rows.forEach((item) => seenStudentNotificationIdsRef.current.add(item.id));
+      studentNotificationsInitializedRef.current = true;
+      setStudentNotifications(rows);
+
+      const popupItem = firstLoad
+        ? rows.find((item) => !item.is_read && item.notification_type === 'lost_damaged_book')
+        : newRows.find((item) => item.notification_type === 'lost_damaged_book');
+
+      if (popupItem && !studentNotificationPopupBusyRef.current) {
+        studentNotificationPopupBusyRef.current = true;
+        try {
+          const dialog = await alertController.create({
+            cssClass: 'libtrack-alert libtrack-success-alert',
+            header: popupItem.title || 'Library Notice',
+            message: popupItem.message,
+            buttons: [{ text: 'View Notifications', role: 'confirm', cssClass: 'libtrack-dialog-confirm' }],
+            backdropDismiss: false,
+          });
+          await dialog.present();
+          await dialog.onDidDismiss();
+        } finally {
+          studentNotificationPopupBusyRef.current = false;
+        }
+      }
+    } catch {
+      // Keep the rest of the student dashboard usable if notifications cannot load.
+    } finally {
+      setStudentNotificationsLoading(false);
+    }
+  }
+
+  async function markStudentNotificationRead(notificationId: number) {
+    if (!token) return;
+    try {
+      await readResponse(await fetch(`${API}/notifications/${notificationId}/read`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      }));
+      setStudentNotifications((items) => items.map((item) => item.id === notificationId ? { ...item, is_read: true } : item));
+      setSelectedStudentNotification((item) => item?.id === notificationId ? { ...item, is_read: true } : item);
+    } catch {
+      // The notification remains visible; it can be marked read on the next attempt.
+    }
+  }
+
+  async function loadLostBookCases() {
+    if (!token || !isAdmin) return;
+    setLostCasesLoading(true);
+    try {
+      const response = await fetch(`${API}/lost-books`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await readResponse(response);
+      setLostBookCases(Array.isArray(data) ? data : []);
+    } catch (err) {
+      setError(`Could not load lost/damaged book records: ${getError(err)}`);
+    } finally {
+      setLostCasesLoading(false);
+    }
+  }
+
+  function reportLostBook(record: Borrowing, caseType: 'lost' | 'damaged') {
+    if (!token || !isAdmin) return;
+    setLostBookMarketValue('0'); setLostBookAdditionalFine('0'); setLostBookNote('');
+    setLostBookDialog({ mode: 'report', record, caseType });
+  }
+
+  function openResolveLostBookCase(item: LostBookCase, resolution: 'paid' | 'replaced') {
+    if (!token || !isAdmin) return;
+    setLostBookNote('');
+    setLostBookReceiptNumber('');
+    setLostBookAmountPaid('');
+    setLostBookPaymentDate(new Date().toISOString().slice(0, 10));
+    setLostBookPaymentMethod('Cash');
+    setLostBookReplacementTitle('');
+    setLostBookReplacementDate(new Date().toISOString().slice(0, 10));
+    setLostBookReceivedBy('');
+    setLostBookReceiptFile(null);
+    setLostBookDialog({ mode: 'resolve', item, resolution });
+  }
+
+  async function submitLostBookDialog() {
+    if (!token || !isAdmin || !lostBookDialog) return;
+    const dialog = lostBookDialog;
+    if (dialog.mode === 'report') {
+      const marketValue = Number(lostBookMarketValue);
+      const additionalFine = Number(lostBookAdditionalFine);
+      if (!Number.isFinite(marketValue) || marketValue < 0) { setError('Please enter a valid current book value.'); return; }
+      if (!Number.isFinite(additionalFine) || additionalFine < 0) { setError('Please enter a valid additional fine.'); return; }
+      if (!dialog.record || !dialog.caseType) return;
+      setLoading(true); setError(''); setNotice('');
+      try {
+        await readResponse(await fetch(`${API}/borrowings/${dialog.record.id}/report-lost`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ market_value: marketValue, additional_fine: additionalFine, case_type: dialog.caseType, note: lostBookNote.trim() }),
+        }));
+        const [br, cr, booksRes] = await Promise.all([
+          fetch(`${API}/borrowings`, { headers: { Authorization: `Bearer ${token}` } }),
+          fetch(`${API}/lost-books`, { headers: { Authorization: `Bearer ${token}` } }),
+          fetch(`${API}/books`),
+        ]);
+        const [bd, cd, booksData] = await Promise.all([readResponse(br), readResponse(cr), readResponse(booksRes)]);
+        setBorrowings(Array.isArray(bd) ? bd : []);
+        setLostBookCases(Array.isArray(cd) ? cd : []);
+        setBooks(Array.isArray(booksData) ? booksData : []);
+        setLostBookDialog(null);
+        setNotice(`Recorded ${dialog.caseType} book case. Borrowing privileges are suspended until the case is settled.`);
+      } catch (err) { setError(`Could not report the book: ${getError(err)}`); }
+      finally { setLoading(false); }
+      return;
+    }
+    if (!dialog.item || !dialog.resolution) return;
+    if (dialog.resolution === 'paid') {
+      const amount = Number(lostBookAmountPaid);
+      if (!lostBookAmountPaid.trim() || !Number.isFinite(amount) || amount <= 0) {
+        setError('Please enter a valid amount paid.');
+        return;
+      }
+      if (amount > Number(dialog.item.amount_due ?? Number.MAX_SAFE_INTEGER)) {
+        setError('Amount paid cannot exceed the case amount due.');
+        return;
+      }
+    }
+    if (dialog.resolution === 'replaced' && !lostBookReplacementTitle.trim()) {
+      setError('Please enter the replacement book title.');
+      return;
+    }
+    const resolutionDetails = dialog.resolution === 'paid'
+      ? [
+          `Receipt Number: ${lostBookReceiptNumber.trim() || 'Not provided'}`,
+          `Amount Paid: PHP ${Number(lostBookAmountPaid).toFixed(2)}`,
+          `Payment Date: ${lostBookPaymentDate}`,
+          `Payment Method: ${lostBookPaymentMethod}`,
+          lostBookNote.trim() ? `Other Notes: ${lostBookNote.trim()}` : '',
+          lostBookReceiptFile ? `Receipt Attachment: ${lostBookReceiptFile.name}` : '',
+        ].filter(Boolean).join(' | ')
+      : [
+          `Receipt Number: ${lostBookReceiptNumber.trim() || 'Not provided'}`,
+          `Replacement Book Title: ${lostBookReplacementTitle.trim()}`,
+          `Date Received: ${lostBookReplacementDate}`,
+          `Received / Checked By: ${lostBookReceivedBy.trim() || 'Not provided'}`,
+          lostBookNote.trim() ? `Reference Note: ${lostBookNote.trim()}` : '',
+          lostBookReceiptFile ? `Receipt Attachment: ${lostBookReceiptFile.name}` : '',
+        ].filter(Boolean).join(' | ');
+    setLoading(true); setError(''); setNotice('');
+    try {
+      let uploadedReceiptKey = '';
+      if (lostBookReceiptFile) {
+        const receiptForm = new FormData();
+        receiptForm.append('file', lostBookReceiptFile);
+        const uploadResult = await readResponse(await fetch(`${API}/lost-books/${dialog.item.id}/receipt`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}` },
+          body: receiptForm,
+        }));
+        uploadedReceiptKey = String(uploadResult?.storage_key || '');
+      }
+      await readResponse(await fetch(`${API}/lost-books/${dialog.item.id}/resolve`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ resolution_status: dialog.resolution, note: resolutionDetails }),
+      }));
+      const previewCase: LostBookCase = {
+        ...dialog.item,
+        resolution_status: dialog.resolution,
+        resolution_note: [
+          resolutionDetails,
+          uploadedReceiptKey ? `Receipt Storage Key: ${uploadedReceiptKey}` : '',
+        ].filter(Boolean).join(' | '),
+        resolved_at: new Date().toISOString(),
+      };
+      setLostBookDialog(null);
+      setReceiptPreviewCase(previewCase);
+      await loadLostBookCases();
+      setNotice(`Lost/damaged book case #${dialog.item.id} marked ${dialog.resolution}. Receipt preview is ready.`);
+    } catch (err) { setError(`Could not resolve the case: ${getError(err)}`); }
+    finally { setLoading(false); }
+  }
+
+  async function viewReceiptAttachment(item: LostBookCase) {
+    if (!token) return;
+    setReceiptAttachmentLoading(true);
+    setReceiptAttachmentUrl(null);
+    try {
+      const response = await fetch(`${API}/lost-books/${item.id}/receipt`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!response.ok) throw new Error(await response.text());
+      const blob = await response.blob();
+      setReceiptAttachmentUrl(URL.createObjectURL(blob));
+    } catch (err) {
+      setError(`Could not open receipt attachment: ${getError(err)}`);
+    } finally {
+      setReceiptAttachmentLoading(false);
+    }
+  }
+
+  async function reuploadReceiptAttachment(item: LostBookCase, file: File) {
+    if (!token || !file) return;
+    setReceiptReuploadLoading(true);
+    setError('');
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      await readResponse(await fetch(`${API}/lost-books/${item.id}/receipt`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: form,
+      }));
+
+      const oldParts = (item.resolution_note || '').split(' | ').filter(Boolean)
+        .filter((part) => !/^Receipt Attachment:/i.test(part) && !/^Receipt Storage Key:/i.test(part));
+      const updatedItem = {
+        ...item,
+        resolution_note: [...oldParts, `Receipt Attachment: ${file.name}`].join(' | '),
+      };
+      setReceiptPreviewCase(updatedItem);
+      await loadLostBookCases();
+      setNotice('Receipt uploaded successfully. You can now open its preview.');
+      await viewReceiptAttachment(updatedItem);
+    } catch (err) {
+      setError(`Could not upload receipt attachment: ${getError(err)}`);
+    } finally {
+      setReceiptReuploadLoading(false);
+    }
+  }
+
+  const availableCourseOptions = useMemo(() => [
+    ...RESEARCH_COURSE_OPTIONS,
+    ...additionalCourses.map((code) => ({ value: code, shortName: code, label: code, description: 'Additional course collection' })),
+  ], [additionalCourses]);
+
+  async function loadAdditionalCourses() {
+    try {
+      const response = await fetch(`${API}/courses`);
+      const data = await readResponse(response);
+      setAdditionalCourses(Array.isArray(data) ? data.filter((code: unknown) => typeof code === 'string' && !['BSIT', 'BSBA', 'BSED'].includes(code.toUpperCase())) : []);
+    } catch (err) {
+      setError(`Could not load added courses: ${getError(err)}`);
+    }
+  }
+
+  async function addCourse() {
+    if (!isAdmin || !token) return;
+    const entered = await libtrackPrompt('Enter the new course name or code (example: BSCRIM).');
+    const code = String(entered || '').trim().toUpperCase();
+    if (!code) return;
+    try {
+      await readResponse(await fetch(`${API}/courses`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ code }),
+      }));
+      await loadAdditionalCourses();
+      await Promise.all([loadResearchCollectionCovers(), loadEbookCollectionCovers()]);
+      setNotice(`${code} course added successfully to both Research Library and E-Book Library.`);
+      setEbookUploadCourse(code);
+      setEbookUploadYear(`1ST YEAR ${code}`);
+      setEbookUploadSemester('1st Semester');
+      setEbookUploadSubject('');
+      const addCover = await libtrackConfirm(`Add a collection photo for ${code} now?`);
+      if (addCover) {
+        newCourseCoverTargetRef.current = code;
+        ebookCollectionCoverTargetRef.current = code;
+        ebookCollectionCoverInputRef.current?.click();
+      }
+    } catch (err) {
+      setError(`Could not add course: ${getError(err)}`);
+    }
+  }
+
+  async function deleteCourse() {
+    if (!isAdmin || !token || additionalCourses.length === 0) return;
+    const entered = await libtrackPrompt(`Enter the exact course code to delete:\n${additionalCourses.join(', ')}`);
+    const code = String(entered || '').trim().toUpperCase();
+    if (!code || !additionalCourses.includes(code)) {
+      if (code) setError('Course code not found in the added courses list.');
+      return;
+    }
+    if (!await libtrackConfirm(`Delete course ${code}? This is allowed only when no users, research, or e-books are assigned to it.`)) return;
+    try {
+      await readResponse(await fetch(`${API}/courses/${encodeURIComponent(code)}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      }));
+      await loadAdditionalCourses();
+      setNotice(`${code} course deleted successfully.`);
+    } catch (err) {
+      setError(`Could not delete course: ${getError(err)}`);
+    }
+  }
+
+  useEffect(() => {
+    seenStudentNotificationIdsRef.current = new Set();
+    studentNotificationsInitializedRef.current = false;
+    studentNotificationPopupBusyRef.current = false;
+    setStudentNotifications([]);
+    if (!token || isAdmin) return;
+    void loadStudentNotifications();
+    const notificationTimer = window.setInterval(() => { void loadStudentNotifications(); }, 15000);
+    return () => window.clearInterval(notificationTimer);
+  }, [token, isAdmin]);
+
+  useEffect(() => { if (token) void loadAdditionalCourses(); }, [token]);
+
+  async function loadResearchCollectionCovers() {
+    try {
+      const response = await fetch(`${API}/research/collection-covers`);
+      const data = await readResponse(response);
+      const covers: Record<string, string> = {};
+      for (const [course, value] of Object.entries(data || {})) {
+        if (typeof value === 'string' && value) {
+          const absolute = value.startsWith('http') ? value : `${API}${value}`;
+          covers[course.toUpperCase()] = `${absolute}${absolute.includes('?') ? '&' : '?'}v=${Date.now()}`;
+        }
+      }
+      setResearchCollectionCovers(covers);
+    } catch (err) {
+      // Keep the bundled default collection covers available if the optional
+      // collection-cover endpoint is temporarily unavailable.
+      console.warn('Could not load Research Collection covers:', err);
+    }
+  }
+
+  function chooseResearchCollectionCover(courseCode: string) {
+    if (!isAdmin || !token) return;
+    researchCollectionCoverTargetRef.current = courseCode;
+    researchCollectionCoverInputRef.current?.click();
+  }
+
+  async function uploadResearchCollectionCover(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.currentTarget.files?.[0];
+    event.currentTarget.value = '';
+    const courseCode = researchCollectionCoverTargetRef.current;
+    if (!file || !courseCode || !token || !isAdmin) {
+      if (!file) { ebookCollectionCoverTargetRef.current = null; newCourseCoverTargetRef.current = null; }
+      return;
+    }
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type) || file.size > 5 * 1024 * 1024) {
+      setError('Collection cover must be JPG, PNG, or WEBP and no larger than 5 MB.');
+      researchCollectionCoverTargetRef.current = null;
+      return;
+    }
+    setResearchCollectionCoverUploading(courseCode);
+    setError('');
+    setNotice('');
+    try {
+      const body = new FormData();
+      body.append('file', file, file.name);
+      const result = await readResponse(await fetch(`${API}/research/collection-covers/${courseCode}`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body,
+      }));
+      const url = typeof result?.cover_url === 'string' ? result.cover_url : '';
+      if (url) {
+        const absolute = url.startsWith('http') ? url : `${API}${url}`;
+        setResearchCollectionCovers((current) => ({ ...current, [courseCode]: `${absolute}${absolute.includes('?') ? '&' : '?'}v=${Date.now()}` }));
+      } else {
+        await loadResearchCollectionCovers();
+      }
+      setNotice(`${courseCode} Research Collection photo updated successfully.`);
+    } catch (err) {
+      setError(`Could not update ${courseCode} collection photo: ${getError(err)}`);
+    } finally {
+      setResearchCollectionCoverUploading(null);
+      researchCollectionCoverTargetRef.current = null;
+    }
+  }
+
+  useEffect(() => { void loadResearchCollectionCovers(); }, []);
+
+  async function loadEbookCollectionCovers() {
+    try {
+      const response = await fetch(`${API}/ebooks/collection-covers`);
+      const data = await readResponse(response);
+      const covers: Record<string, string> = {};
+      for (const [course, value] of Object.entries(data || {})) {
+        if (typeof value === 'string' && value) {
+          const absolute = value.startsWith('http') ? value : `${API}${value}`;
+          covers[course.toUpperCase()] = `${absolute}${absolute.includes('?') ? '&' : '?'}v=${Date.now()}`;
+        }
+      }
+      setEbookCollectionCovers(covers);
+    } catch (err) {
+      console.warn('Could not load E-Book Collection covers:', err);
+    }
+  }
+
+  function chooseEbookCollectionCover(courseCode: string) {
+    if (!isAdmin || !token) return;
+    ebookCollectionCoverTargetRef.current = courseCode;
+    ebookCollectionCoverInputRef.current?.click();
+  }
+
+  async function uploadEbookCollectionCover(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.currentTarget.files?.[0];
+    event.currentTarget.value = '';
+    const courseCode = ebookCollectionCoverTargetRef.current;
+    if (!file || !courseCode || !token || !isAdmin) return;
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type) || file.size > 5 * 1024 * 1024) {
+      setError('Collection cover must be JPG, PNG, or WEBP and no larger than 5 MB.');
+      ebookCollectionCoverTargetRef.current = null;
+      newCourseCoverTargetRef.current = null;
+      return;
+    }
+    setEbookCollectionCoverUploading(courseCode);
+    setError('');
+    setNotice('');
+    try {
+      const body = new FormData();
+      body.append('file', file, file.name);
+      const result = await readResponse(await fetch(`${API}/ebooks/collection-covers/${encodeURIComponent(courseCode)}`, {
+        method: 'POST', headers: { Authorization: `Bearer ${token}` }, body,
+      }));
+      const url = typeof result?.cover_url === 'string' ? result.cover_url : '';
+      if (url) {
+        const absolute = url.startsWith('http') ? url : `${API}${url}`;
+        setEbookCollectionCovers((current) => ({ ...current, [courseCode]: `${absolute}${absolute.includes('?') ? '&' : '?'}v=${Date.now()}` }));
+      } else await loadEbookCollectionCovers();
+      // If this upload was started immediately after adding a course, use the same
+      // selected image for its Research collection card as well.
+      if (newCourseCoverTargetRef.current === courseCode) {
+        const researchBody = new FormData();
+        researchBody.append('file', file, file.name);
+        const researchResult = await readResponse(await fetch(`${API}/research/collection-covers/${encodeURIComponent(courseCode)}`, {
+          method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: researchBody,
+        }));
+        if (typeof researchResult?.cover_url === 'string') {
+          const researchUrl = researchResult.cover_url.startsWith('http') ? researchResult.cover_url : `${API}${researchResult.cover_url}`;
+          setResearchCollectionCovers((current) => ({ ...current, [courseCode]: `${researchUrl}${researchUrl.includes('?') ? '&' : '?'}v=${Date.now()}` }));
+        } else await loadResearchCollectionCovers();
+        newCourseCoverTargetRef.current = null;
+      }
+      setNotice(`${courseCode} E-Book Collection photo updated successfully.`);
+    } catch (err) {
+      setError(`Could not update ${courseCode} collection photo: ${getError(err)}`);
+    } finally {
+      setEbookCollectionCoverUploading(null);
+      ebookCollectionCoverTargetRef.current = null;
+      newCourseCoverTargetRef.current = null;
+    }
+  }
+
+  useEffect(() => { void loadEbookCollectionCovers(); }, []);
+
   async function loadResearch() {
     setResearchLoading(true);
     try {
@@ -2453,6 +3976,133 @@ function App() {
     }
   }
 
+  async function loadInventory() {
+    if (!isAdmin) return;
+    const hasCachedInventory = books.length > 0 || researchItems.length > 0 || ebooks.length > 0;
+    if (!hasCachedInventory) setInventoryLoading(true);
+    setInventoryError('');
+    try {
+      const [booksResponse, researchResponse, ebooksResponse] = await Promise.all([
+        fetch(`${API}/books`, { headers: token ? { Authorization: `Bearer ${token}` } : undefined }),
+        fetch(`${API}/research`, { headers: token ? { Authorization: `Bearer ${token}` } : undefined }),
+        fetch(`${API}/ebooks`, { headers: token ? { Authorization: `Bearer ${token}` } : undefined }),
+      ]);
+      const [bookRows, researchRows, ebookRows] = await Promise.all([
+        readResponse(booksResponse), readResponse(researchResponse), readResponse(ebooksResponse),
+      ]);
+      setBooks(Array.isArray(bookRows) ? bookRows : []);
+      setResearchItems(Array.isArray(researchRows) ? researchRows : []);
+      setEbooks(Array.isArray(ebookRows) ? ebookRows : []);
+    } catch (err) {
+      // Preserve cached data if the network is temporarily unavailable.
+      if (!hasCachedInventory) {
+        setInventoryError(`Could not load complete inventory: ${getError(err)}`);
+      }
+    } finally {
+      setInventoryLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (page === 'inventory' && isAdmin && token) void loadInventory();
+  }, [page, isAdmin, token]);
+
+  function exportInventoryCsv() {
+    const escapeCell = (value: unknown) => {
+      const text = value === null || value === undefined ? '' : String(value);
+      return `"${text.replace(/"/g, '""')}"`;
+    };
+
+    // Two-column vertical layout: field names in column A, values in column B.
+    // Each inventory record gets its own block so WPS/Excel does not need
+    // horizontal scrolling to read the exported file.
+    const rows: unknown[][] = [];
+    const addField = (label: string, value: unknown = '') => {
+      rows.push([label, value]);
+    };
+    const addBlankLine = () => rows.push([]);
+
+    let filename = 'libtrack-inventory';
+
+    if (inventoryTab === 'books') {
+      filename += '-books';
+      addField('LIBTRACK LIBRARY INVENTORY', 'PHYSICAL BOOKS');
+      addField('Total Book Titles', books.length);
+      addField('Total Copies', books.reduce((sum, item) => sum + (Number(item.total_copies) || 0), 0));
+      addField('Total Available Copies', books.reduce((sum, item) => sum + (Number(item.available_copies) || 0), 0));
+      addField('Total Borrowed Copies', books.reduce((sum, item) => sum + Math.max(0, (Number(item.total_copies) || 0) - (Number(item.available_copies) || 0)), 0));
+      addBlankLine();
+
+      books.forEach((item, index) => {
+        addField(`BOOK ${index + 1}`);
+        addField('ID', item.id);
+        addField('Book Title', item.title);
+        addField('Author', item.author);
+        addField('Category', item.category);
+        addField('Call Number', item.call_number || '');
+        addField('Total Copies', item.total_copies);
+        addField('Available Copies', item.available_copies);
+        addField('Borrowed Copies', Math.max(0, (Number(item.total_copies) || 0) - (Number(item.available_copies) || 0)));
+        addBlankLine();
+      });
+    } else if (inventoryTab === 'research') {
+      filename += '-research';
+      addField('LIBTRACK LIBRARY INVENTORY', 'RESEARCH MATERIALS');
+      addField('Total Research Materials', researchItems.length);
+      addField('With PDF File', researchItems.filter((item) => item.has_pdf).length);
+      addBlankLine();
+
+      researchItems.forEach((item, index) => {
+        addField(`RESEARCH ${index + 1}`);
+        addField('ID', item.id);
+        addField('Title', item.title);
+        addField('Author(s) / Researcher(s)', item.authors);
+        addField('Research Teacher / Adviser', item.teacher || '');
+        addField('Year', item.year);
+        addField('Course', item.course);
+        addField('Subject', item.subject);
+        addField('Research Type', item.research_type || '');
+        addField('Verification Status', item.verification_status || '');
+        addField('PDF Available', item.has_pdf ? 'Yes' : 'No');
+        addBlankLine();
+      });
+    } else {
+      filename += '-ebooks';
+      addField('LIBTRACK LIBRARY INVENTORY', 'E-BOOK FILES');
+      addField('Total E-book Files', ebooks.length);
+      addBlankLine();
+
+      ebooks.forEach((item, index) => {
+        addField(`E-BOOK ${index + 1}`);
+        addField('ID', item.id);
+        addField('Title', item.title);
+        addField('Author', item.author);
+        addField('Category', item.category);
+        addField('Course', item.course || '');
+        addField('Year', item.year || '');
+        addField('Semester', item.semester || '');
+        addField('Subject', item.subject || '');
+        addField('File Name', item.file_name);
+        addField('File Size', item.size || '');
+        addField('Last Modified', item.modified_time || '');
+        addBlankLine();
+      });
+    }
+
+    // Use real BOM and CRLF characters so spreadsheet apps recognize UTF-8
+    // correctly and place each field/value pair on a separate row.
+    const csv = rows.map((row) => row.map(escapeCell).join(',')).join('\r\n');
+    const blob = new Blob(['\uFEFF', csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${filename}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
   async function deleteEbook(item: EBook) {
     if (!isAdmin || !token) return;
     if (!(await libtrackConfirm(`Are you sure you want to delete the e-book "${item.title}"? This will permanently remove its PDF file.`))) return;
@@ -2466,6 +4116,36 @@ function App() {
       setNotice(`E-book "${item.title}" was deleted.`);
     } catch (err) {
       setEbooksError(`Could not delete e-book: ${getError(err)}`);
+    }
+  }
+
+  function chooseEbookCover(item: EBook) {
+    if (!isAdmin || !token) return;
+    ebookCoverTargetRef.current = item.id;
+    ebookCoverInputRef.current?.click();
+  }
+
+  async function uploadEbookCover(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.currentTarget.files?.[0];
+    event.currentTarget.value = '';
+    const id = ebookCoverTargetRef.current;
+    if (!file || !id || !token) return;
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type) || file.size > 5 * 1024 * 1024) {
+      setEbooksError('Cover must be JPG, PNG, or WEBP and no larger than 5 MB.');
+      return;
+    }
+    setEbookCoverUploadingId(id);
+    try {
+      const body = new FormData(); body.append('file', file, file.name);
+      await readResponse(await fetch(`${API}/ebooks/${encodeURIComponent(id)}/cover`, {
+        method: 'POST', headers: { Authorization: `Bearer ${token}` }, body,
+      }));
+      await loadEbooks();
+      setNotice('E-book cover updated successfully.');
+    } catch (err) {
+      setEbooksError(`Could not update e-book cover: ${getError(err)}`);
+    } finally {
+      setEbookCoverUploadingId(null); ebookCoverTargetRef.current = null;
     }
   }
 
@@ -2560,6 +4240,7 @@ function App() {
       inputs: [
         { name: 'title', type: 'text', label: 'Research title', placeholder: 'Research or capstone title', value: existing?.title || '', attributes: { required: true } },
         { name: 'authors', type: 'text', label: 'Author(s) / Researcher(s)', placeholder: 'Author names', value: existing?.authors || '', attributes: { required: true } },
+        { name: 'teacher', type: 'text', label: 'Research Teacher / Adviser', placeholder: 'Enter teacher or research adviser name', value: existing?.teacher || '' },
         { name: 'year', type: 'number', label: 'Year published', placeholder: 'e.g. 2025', value: existing?.year || '', attributes: { min: 1900, max: 2100 } },
         { name: 'course', type: 'text', label: 'Course', placeholder: 'BSIT, BSED, or BSBA', value: existing?.course || '', attributes: { required: true } },
         { name: 'research_type', type: 'text', label: 'Research type', placeholder: 'Research Paper / BSIT Capstone Project / Faculty Research', value: existing?.research_type || '', attributes: { required: true } },
@@ -2577,12 +4258,66 @@ function App() {
     });
     await form.present();
 
+
+    // Add a compact + button at the right edge of the Authors input.
+    // Keep the extra inputs in this dialog and append their values on save.
+    await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+    const researchAlertRoot = form.shadowRoot || form;
+    const researchAuthorInput = (
+      researchAlertRoot.querySelector('input[name="authors"]') ||
+      Array.from(researchAlertRoot.querySelectorAll('input.alert-input')).find((input) =>
+        (input as HTMLInputElement).placeholder === 'Author names'
+      )
+    ) as HTMLInputElement | null;
+    const researchAuthorExtras: HTMLInputElement[] = [];
+    const researchAuthorWrapper = researchAuthorInput?.closest('.alert-input-wrapper') as HTMLElement | null;
+    if (researchAuthorInput && researchAuthorWrapper) {
+      const authorRow = document.createElement('div');
+      authorRow.style.cssText = 'display:flex;align-items:center;gap:8px;width:100%;';
+      researchAuthorWrapper.appendChild(authorRow);
+      authorRow.appendChild(researchAuthorInput);
+      researchAuthorInput.style.cssText += ';flex:1;min-width:0;width:100%;box-sizing:border-box;';
+
+      const addResearchAuthor = document.createElement('button');
+      addResearchAuthor.type = 'button';
+      addResearchAuthor.textContent = '+';
+      addResearchAuthor.title = 'Add another author';
+      addResearchAuthor.setAttribute('aria-label', 'Add another author');
+      addResearchAuthor.style.cssText = 'flex:0 0 42px;width:42px;height:44px;border:0;border-radius:10px;background:#54775b;color:#fff;font-size:25px;font-weight:700;line-height:1;cursor:pointer;';
+      addResearchAuthor.addEventListener('click', () => {
+        const extraRow = document.createElement('div');
+        extraRow.style.cssText = 'display:flex;align-items:center;gap:8px;width:100%;margin-top:8px;';
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.placeholder = `Author ${researchAuthorExtras.length + 2}`;
+        input.setAttribute('aria-label', input.placeholder);
+        input.style.cssText = 'flex:1;min-width:0;width:100%;box-sizing:border-box;min-height:44px;padding:10px 12px;border:1px solid #d7e0e8;border-radius:10px;background:#f8fafc;color:#203047;font-size:14px;';
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.textContent = '−';
+        remove.title = 'Remove author';
+        remove.setAttribute('aria-label', 'Remove author');
+        remove.style.cssText = 'flex:0 0 42px;width:42px;height:44px;border:1px solid #d7e0e8;border-radius:10px;background:#f1f5f9;color:#475569;font-size:23px;cursor:pointer;';
+        remove.addEventListener('click', () => {
+          extraRow.remove();
+          const index = researchAuthorExtras.indexOf(input);
+          if (index >= 0) researchAuthorExtras.splice(index, 1);
+        });
+        extraRow.append(input, remove);
+        researchAuthorWrapper.appendChild(extraRow);
+        researchAuthorExtras.push(input);
+        input.focus();
+      });
+      authorRow.appendChild(addResearchAuthor);
+    }
+
     const result = await form.onDidDismiss();
     if (result.role !== 'confirm') return;
 
     const values = result.data?.values || {};
     const title = String(values.title || '').trim();
-    const authors = String(values.authors || '').trim();
+    const authors = [String(values.authors || '').trim(), ...researchAuthorExtras.map((input) => input.value.trim())].filter(Boolean).join(', ');
+    const teacher = String(values.teacher || '').trim();
     const year = String(values.year || '').trim();
     const selectedCourse = String(values.course || 'BSIT').trim().toUpperCase();
     const researchType = String(values.research_type || 'Research Paper').trim();
@@ -2597,8 +4332,8 @@ function App() {
       setError('Please enter the research title and author(s).');
       return;
     }
-    if (!['BSIT', 'BSED', 'BSBA'].includes(selectedCourse)) {
-      setError('Course must be BSIT, BSED, or BSBA.');
+    if (!availableCourseOptions.some((courseOption) => courseOption.value.toUpperCase() === selectedCourse)) {
+      setError('Please select or add a valid course first.');
       return;
     }
     if (url && !/^https?:\/\//i.test(url)) {
@@ -2617,6 +4352,7 @@ function App() {
       const payload = {
         title,
         authors,
+        teacher: teacher || null,
         year: year || 'Not specified',
         course: selectedCourse,
         subject: subject || 'General',
@@ -2792,6 +4528,58 @@ function App() {
 
     await form.present();
 
+    // Add a compact + button at the right edge of the Author input.
+    // Keep the extra inputs in this dialog and append their values on save.
+    await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+    const bookAlertRoot = form.shadowRoot || form;
+    const bookAuthorInput = (
+      bookAlertRoot.querySelector('input[name="author"]') ||
+      Array.from(bookAlertRoot.querySelectorAll('input.alert-input')).find((input) =>
+        (input as HTMLInputElement).placeholder === 'Author name'
+      )
+    ) as HTMLInputElement | null;
+    const bookAuthorExtras: HTMLInputElement[] = [];
+    const bookAuthorWrapper = bookAuthorInput?.closest('.alert-input-wrapper') as HTMLElement | null;
+    if (bookAuthorInput && bookAuthorWrapper) {
+      const authorRow = document.createElement('div');
+      authorRow.style.cssText = 'display:flex;align-items:center;gap:8px;width:100%;';
+      bookAuthorWrapper.appendChild(authorRow);
+      authorRow.appendChild(bookAuthorInput);
+      bookAuthorInput.style.cssText += ';flex:1;min-width:0;width:100%;box-sizing:border-box;';
+
+      const addBookAuthor = document.createElement('button');
+      addBookAuthor.type = 'button';
+      addBookAuthor.textContent = '+';
+      addBookAuthor.title = 'Add another author';
+      addBookAuthor.setAttribute('aria-label', 'Add another author');
+      addBookAuthor.style.cssText = 'flex:0 0 42px;width:42px;height:44px;border:0;border-radius:10px;background:#54775b;color:#fff;font-size:25px;font-weight:700;line-height:1;cursor:pointer;';
+      addBookAuthor.addEventListener('click', () => {
+        const extraRow = document.createElement('div');
+        extraRow.style.cssText = 'display:flex;align-items:center;gap:8px;width:100%;margin-top:8px;';
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.placeholder = `Author ${bookAuthorExtras.length + 2}`;
+        input.setAttribute('aria-label', input.placeholder);
+        input.style.cssText = 'flex:1;min-width:0;width:100%;box-sizing:border-box;min-height:44px;padding:10px 12px;border:1px solid #d7e0e8;border-radius:10px;background:#f8fafc;color:#203047;font-size:14px;';
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.textContent = '−';
+        remove.title = 'Remove author';
+        remove.setAttribute('aria-label', 'Remove author');
+        remove.style.cssText = 'flex:0 0 42px;width:42px;height:44px;border:1px solid #d7e0e8;border-radius:10px;background:#f1f5f9;color:#475569;font-size:23px;cursor:pointer;';
+        remove.addEventListener('click', () => {
+          extraRow.remove();
+          const index = bookAuthorExtras.indexOf(input);
+          if (index >= 0) bookAuthorExtras.splice(index, 1);
+        });
+        extraRow.append(input, remove);
+        bookAuthorWrapper.appendChild(extraRow);
+        bookAuthorExtras.push(input);
+        input.focus();
+      });
+      authorRow.appendChild(addBookAuthor);
+    }
+
     // Ionic AlertController renders its inputs inside the alert shadow root.
     // Attach the change handler after presentation so the selected File is
     // retained while the alert closes and the book is saved.
@@ -2809,16 +4597,47 @@ function App() {
       coverInput.style.borderRadius = '10px';
       coverInput.style.background = '#f7f9fc';
 
+      // Live cover preview, placed immediately beneath the file picker.
+      const preview = document.createElement('div');
+      preview.style.cssText = 'margin-top:12px;padding:12px;border:1px solid #e1e7ee;border-radius:12px;background:#f8fafc;display:flex;flex-direction:column;align-items:center;gap:8px;';
+      const previewLabel = document.createElement('div');
+      previewLabel.textContent = 'Cover Preview';
+      previewLabel.style.cssText = 'align-self:flex-start;font-size:12px;font-weight:700;color:#526174;';
+      const previewImage = document.createElement('img');
+      previewImage.alt = 'Selected book cover preview';
+      previewImage.style.cssText = 'display:block;width:auto;max-width:100%;height:190px;object-fit:contain;border-radius:6px;background:#fff;';
+      const previewEmpty = document.createElement('div');
+      previewEmpty.textContent = 'Choose an image to see the cover preview';
+      previewEmpty.style.cssText = 'font-size:12px;color:#8793a2;padding:22px 8px;text-align:center;';
+      preview.append(previewLabel, previewImage, previewEmpty);
+      coverInput.insertAdjacentElement('afterend', preview);
+
+      let previewObjectUrl: string | null = null;
+      const showPreview = (url: string | null) => {
+        previewImage.hidden = !url;
+        previewEmpty.hidden = !!url;
+        if (url) previewImage.src = url;
+        else previewImage.removeAttribute('src');
+      };
+
+      const currentCoverUrl = existingBook?.cover_image
+        ? resolveBookImageUrl(existingBook.cover_image)
+        : null;
+      if (currentCoverUrl) showPreview(currentCoverUrl);
+      else showPreview(null);
+
       coverInput.addEventListener('change', () => {
         const file = coverInput.files?.[0] || null;
         if (!file) {
           selectedCoverFile = null;
+          showPreview(currentCoverUrl);
           return;
         }
 
         if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) {
           selectedCoverFile = null;
           coverInput.value = '';
+          showPreview(currentCoverUrl);
           setError('Please choose a JPG, PNG, or WEBP image.');
           return;
         }
@@ -2826,14 +4645,22 @@ function App() {
         if (file.size > 5 * 1024 * 1024) {
           selectedCoverFile = null;
           coverInput.value = '';
+          showPreview(currentCoverUrl);
           setError('Book cover image must be 5 MB or smaller.');
           return;
         }
 
         selectedCoverFile = file;
+        if (previewObjectUrl) URL.revokeObjectURL(previewObjectUrl);
+        previewObjectUrl = URL.createObjectURL(file);
+        showPreview(previewObjectUrl);
         setError('');
         setNotice(`Selected book cover: ${file.name}. Press ${existingBook ? 'Save Changes' : 'Add Book'} to upload it.`);
       });
+
+      form.addEventListener('ionAlertDidDismiss', () => {
+        if (previewObjectUrl) URL.revokeObjectURL(previewObjectUrl);
+      }, { once: true });
     } else {
       setError('The Book Cover field could not be initialized. Please refresh and try again.');
     }
@@ -2843,7 +4670,9 @@ function App() {
 
     const values = result.data?.values || {};
     const title = String(values.title || '').trim();
-    const author = String(values.author || '').trim();
+    const author = [String(values.author || '').trim(), ...bookAuthorExtras.map((input) => input.value.trim())]
+      .filter(Boolean)
+      .join(', ');
     const category = cleanCategoryLabel(String(values.category || '').trim());
     const call_number = String(values.call_number || '').trim();
     const description = String(values.description || '').trim();
@@ -3133,6 +4962,57 @@ function App() {
 
   ).length;
 
+  // Admin Home insights are derived from the existing authenticated API data.
+  const todayISO = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila' }).format(new Date());
+  const adminPendingRequests = borrowings
+    .filter((record) => record.status === 'pending')
+    .sort((a, b) => String(b.borrowed_at || '').localeCompare(String(a.borrowed_at || '')))
+    .slice(0, 5);
+  const adminOverdueRecords = borrowings
+    .filter((record) => record.status === 'borrowed' && record.due_date < todayISO)
+    .sort((a, b) => String(a.due_date).localeCompare(String(b.due_date)));
+  const adminLowStockBooks = books
+    .filter((book) => Number(book.available_copies) <= 1)
+    .sort((a, b) => Number(a.available_copies) - Number(b.available_copies))
+    .slice(0, 6);
+  const adminRecentActivities = [...borrowings]
+    .filter((record) => ['pending', 'borrowed', 'returned'].includes(record.status))
+    .sort((a, b) => String(b.returned_at || b.borrowed_at || '').localeCompare(String(a.returned_at || a.borrowed_at || '')))
+    .slice(0, 6);
+  const adminMonthlyBorrowing = (() => {
+    const months: { key: string; label: string; count: number }[] = [];
+    const now = new Date();
+    for (let offset = 5; offset >= 0; offset -= 1) {
+      const monthDate = new Date(now.getFullYear(), now.getMonth() - offset, 1);
+      const key = `${monthDate.getFullYear()}-${String(monthDate.getMonth() + 1).padStart(2, '0')}`;
+      months.push({
+        key,
+        label: monthDate.toLocaleDateString('en-US', { month: 'short', timeZone: 'Asia/Manila' }),
+        count: borrowings.filter((record) =>
+          ['borrowed', 'returned'].includes(record.status)
+          && String(record.borrowed_at || '').slice(0, 7) === key
+        ).length,
+      });
+    }
+    return months;
+  })();
+  const adminMaxMonthlyBorrowing = Math.max(1, ...adminMonthlyBorrowing.map((month) => month.count));
+  const adminMostActiveCourses = (() => {
+    const counts = new Map<string, number>();
+    borrowings
+      .filter((record) => ['borrowed', 'returned'].includes(record.status))
+      .forEach((record) => {
+        const borrower = accounts.find((account) => account.id === record.user_id);
+        const course = String(borrower?.course || '').trim().toUpperCase();
+        if (borrower?.role === 'student' && ['BSIT', 'BSBA', 'BSED'].includes(course)) {
+          counts.set(course, (counts.get(course) || 0) + 1);
+        }
+      });
+    return ['BSIT', 'BSBA', 'BSED']
+      .map((course) => ({ course, count: counts.get(course) || 0 }))
+      .sort((a, b) => b.count - a.count);
+  })();
+
   const filteredAccounts = useMemo(() => {
 
     const search = accountQuery.trim().toLowerCase();
@@ -3158,6 +5038,41 @@ function App() {
     );
 
   }, [accounts, accountQuery]);
+
+  const accountCourseGroups = useMemo(() => {
+    // Keep every account category available as a tab, even when it has no records.
+    const groups = new Map<string, Account[]>([
+      ['BSIT', []],
+      ['BSED', []],
+      ['BSBA', []],
+      ['FACULTY ACCOUNTS', []],
+      ['ADMIN ACCOUNTS', []],
+    ]);
+    for (const account of filteredAccounts) {
+      const role = String(account.role || 'student').trim().toLowerCase();
+      const course = account.course?.trim().toUpperCase();
+      // Accounts without a course are omitted from the course tabs.
+      if (role !== 'admin' && role !== 'faculty' && !course) continue;
+      const group = role === 'admin'
+        ? 'ADMIN ACCOUNTS'
+        : role === 'faculty'
+          ? 'FACULTY ACCOUNTS'
+          : course!;
+      if (!groups.has(group)) groups.set(group, []);
+      groups.get(group)!.push(account);
+    }
+    return [...groups.entries()].sort(([a], [b]) => {
+      const order = ['BSIT', 'BSED', 'BSBA', 'FACULTY ACCOUNTS', 'ADMIN ACCOUNTS'];
+      const ai = order.indexOf(a);
+      const bi = order.indexOf(b);
+      return (ai < 0 ? 99 : ai) - (bi < 0 ? 99 : bi) || a.localeCompare(b);
+    });
+  }, [filteredAccounts]);
+
+  const visibleAccountGroup = accountCourseGroups.some(([name]) => name === selectedAccountGroup)
+    ? selectedAccountGroup
+    : (accountCourseGroups[0]?.[0] || selectedAccountGroup);
+  const visibleAccountGroups = accountCourseGroups.filter(([name]) => name === visibleAccountGroup);
 
   async function deleteAccount(account: Account) {
     if (!isAdmin || !token) return;
@@ -3194,51 +5109,59 @@ function App() {
     }
   }
 
-  async function editAccountAcademicInfo(account: Account) {
-    if (!isAdmin || !token || account.role.toLowerCase() !== 'student') return;
+  function editAccountDetails(account: Account) {
+    if (!isAdmin || !token || String(account.role || '').toLowerCase() === 'admin') return;
+    setError('');
+    setNotice('');
+    setEditingAccount(account);
+    setAccountEditDraft({
+      full_name: account.full_name || '',
+      email: account.email || '',
+      username: account.username || '',
+      student_id: account.student_id || '',
+      course: account.course || '',
+      year: account.year || '',
+      section: account.section || '',
+      role: (account.role || 'student').toLowerCase(),
+      active: !!account.active,
+    });
+  }
 
-    const nextYear = await libtrackPrompt(
-      'Enter the student year level (for example, 1st Year).',
-      account.year || '',
-    );
-    if (nextYear === null) return;
-
-    const nextSection = await libtrackPrompt(
-      'Enter the student section (for example, A).',
-      account.section || '',
-    );
-    if (nextSection === null) return;
-
-    if (!nextYear.trim() || !nextSection.trim()) {
-      setError('Year and Section cannot be empty.');
-      setNotice('');
+  async function saveAccountEdits() {
+    if (!isAdmin || !token || !editingAccount || accountEditSaving) return;
+    const draft = accountEditDraft;
+    if (!draft.full_name.trim() || !draft.email.trim() || !draft.username.trim()) {
+      setError('Full name, email, and username cannot be empty.');
       return;
     }
-
+    setAccountEditSaving(true);
     setError('');
     setNotice('');
     try {
-      const response = await fetch(`${API}/users/${account.id}`, {
+      const response = await fetch(`${API}/users/${editingAccount.id}`, {
         method: 'PATCH',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          year: nextYear.trim(),
-          section: nextSection.trim(),
+          full_name: draft.full_name.trim(),
+          email: draft.email.trim(),
+          username: draft.username.trim(),
+          ...(String(editingAccount.role || '').toLowerCase() !== 'faculty' ? {
+            student_id: draft.student_id.trim() || null,
+            course: draft.course.trim() || null,
+            year: draft.year.trim() || null,
+            section: draft.section.trim() || null,
+          } : {}),
         }),
       });
       const updated = await readResponse(response);
-      setAccounts((current) => current.map((item) =>
-        item.id === account.id ? { ...item, year: updated.year, section: updated.section } : item
-      ));
-      if (user?.id === account.id) {
-        setUser((current) => current ? { ...current, year: updated.year, section: updated.section } : current);
-      }
-      setNotice(`Updated year and section for ${account.full_name}.`);
+      setAccounts((current) => current.map((item) => item.id === editingAccount.id ? { ...item, ...updated } : item));
+      if (user?.id === editingAccount.id) setUser((current) => current ? { ...current, ...updated } : current);
+      setNotice(`Account details updated for ${updated.full_name || draft.full_name.trim()}.`);
+      setEditingAccount(null);
     } catch (err) {
-      setError(`Could not update year and section: ${getError(err)}`);
+      setError(`Could not update account: ${getError(err)}`);
+    } finally {
+      setAccountEditSaving(false);
     }
   }
 
@@ -3262,10 +5185,42 @@ function App() {
 
   }
 
+  async function loadAdminProblemReports() {
+    if (!token) return;
+    setAdminProblemReportsLoading(true);
+    setAdminProblemReportError('');
+    try {
+      const response = await fetch(`${API}/problem-reports`, { headers: { Authorization: `Bearer ${token}` } });
+      const data = await response.json().catch(() => []);
+      if (!response.ok) throw new Error(data.detail || `Unable to load reports (${response.status}).`);
+      setAdminProblemReports(Array.isArray(data) ? data : []);
+    } catch (error) {
+      setAdminProblemReportError(error instanceof Error ? error.message : 'Unable to load problem reports.');
+    } finally {
+      setAdminProblemReportsLoading(false);
+    }
+  }
+
+  async function updateAdminProblemReport(reportId: number, status: string, adminNote = '') {
+    try {
+      const response = await fetch(`${API}/problem-reports/${reportId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ status, admin_note: adminNote }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.detail || `Unable to update report (${response.status}).`);
+      await loadAdminProblemReports();
+    } catch (error) {
+      setAdminProblemReportError(error instanceof Error ? error.message : 'Unable to update report.');
+    }
+  }
+
   function navigate(nextPage: Page) {
 
     if (nextPage !== page) {
       pageHistoryRef.current.push(page);
+      window.history.pushState({ libtrack: true, page: nextPage }, '', window.location.href);
     }
     setPage(nextPage);
     // Keep navigation behavior consistent for both student and admin sidebars.
@@ -3315,6 +5270,62 @@ function App() {
 
   // ---------------------------------------------------------
 
+
+  async function handleChangeAccountPassword(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setChangePasswordMessage('');
+
+    if (!token) {
+      setChangePasswordMessage('Your session has expired. Please sign in again.');
+      return;
+    }
+    if (!currentAccountPassword || !newAccountPassword || !confirmAccountPassword) {
+      setChangePasswordMessage('Please fill in all three password fields.');
+      return;
+    }
+    if (newAccountPassword.length < 10) {
+      setChangePasswordMessage('New password must be at least 10 characters.');
+      return;
+    }
+    if (newAccountPassword !== confirmAccountPassword) {
+      setChangePasswordMessage('New password and confirmation do not match.');
+      return;
+    }
+    if (currentAccountPassword === newAccountPassword) {
+      setChangePasswordMessage('Choose a password different from your current password.');
+      return;
+    }
+
+    setChangePasswordSaving(true);
+    setChangePasswordMessage('Changing password...');
+    try {
+      const response = await fetch(`${API}/auth/change-password`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          current_password: currentAccountPassword,
+          new_password: newAccountPassword,
+        }),
+      });
+      await readResponse(response);
+      setCurrentAccountPassword('');
+      setNewAccountPassword('');
+      setConfirmAccountPassword('');
+      setShowCurrentAccountPassword(false);
+      setShowNewAccountPassword(false);
+      setShowConfirmAccountPassword(false);
+      setChangePasswordMessage('Password changed successfully. Other devices have been signed out.');
+    } catch (err) {
+      setChangePasswordMessage(getError(err));
+    } finally {
+      setChangePasswordSaving(false);
+    }
+  }
+
+
   if (!token) {
 
     return (
@@ -3356,23 +5367,43 @@ function App() {
 
                 <p className="eyebrow">LIBTRACK ACCOUNT</p>
 
-                <h2>{isRegister ? 'Create your library identity' : 'Welcome back'}</h2>
+                <h2>{isRegister ? `Create your ${registerType} account` : 'Welcome back'}</h2>
 
-                <p>{isRegister ? 'Register once to search books, track borrowing activity and manage your library account.' : 'Sign in to access your library dashboard.'}</p>
+                <p>{isRegister ? 'Register to access LibTrack using your own account.' : 'Sign in to access your library dashboard.'}</p>
 
               </div>
 
               <form onSubmit={handleAuth} className="auth-form">
 
                 {isRegister && <>
+                  <label className="register-field full-field">
+                    <span>Account type</span>
+                    <select className="auth-account-type" value={registerType} onChange={(event) => setRegisterType(event.target.value as 'student' | 'faculty')}>
+                      <option value="student">Student</option>
+                      <option value="faculty">Faculty</option>
+                    </select>
+                  </label>
+                  <div className="register-field full-field profile-photo-field" style={{ display: 'grid', gridTemplateColumns: '64px minmax(0, 1fr)', alignItems: 'center', gap: 12, width: '100%', minWidth: 0, maxWidth: '100%', boxSizing: 'border-box', padding: 12, border: '1px dashed #b8c9dc', borderRadius: 14, background: '#f8fbff', overflow: 'hidden' }}>
+                    <div style={{ width: 60, height: 60, borderRadius: '50%', overflow: 'hidden', display: 'grid', placeItems: 'center', background: '#eaf2ff', color: '#1765d1', fontSize: 24, fontWeight: 800 }}>
+                      {signupPhotoPreview ? <img src={signupPhotoPreview} alt="Profile photo preview" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : (name.trim().charAt(0).toUpperCase() || '👤')}
+                    </div>
+                    <div style={{ minWidth: 0, width: '100%', overflow: 'hidden' }}>
+                      <span style={{ display: 'block', fontWeight: 700, color: '#17324d', marginBottom: 5 }}>Profile photo</span>
+                      <input type="file" accept="image/jpeg,image/png,image/webp" style={{ display: 'block', width: '100%', maxWidth: '100%', minWidth: 0, boxSizing: 'border-box', fontSize: 13 }} onChange={(event) => { const file = event.target.files?.[0]; if (!file) return; if (!['image/jpeg','image/png','image/webp'].includes(file.type) || file.size > 5 * 1024 * 1024) { setError('Choose a JPG, PNG, or WEBP image up to 5 MB.'); event.target.value = ''; return; } setError(''); setSignupPhoto(file); setSignupPhotoPreview(URL.createObjectURL(file)); }} />
+                    </div>
+                  </div>
+
+
 
                   <label className="register-field full-field"><span>Full name</span><IonInput fill="outline" value={name} placeholder="Enter your full name" autocomplete="name" onIonInput={(e) => setName(String(e.detail.value ?? ''))} required minlength={2} maxlength={150} /></label>
 
+
+                  {registerType === 'student' && <>
                   <div className="register-row">
 
                     <label className="register-field"><span>Student ID</span><IonInput fill="outline" value={studentId} placeholder="e.g. PEN-000001" onIonInput={(e) => setStudentId(String(e.detail.value ?? ''))} required maxlength={50} /></label>
 
-                    <label className="register-field"><span>Course</span><IonSelect fill="outline" value={course} placeholder="Select your course" onIonChange={(e) => setCourse(String(e.detail.value ?? ''))} required interface="popover"><IonSelectOption value="BSIT">BSIT</IonSelectOption><IonSelectOption value="BSED">BSED</IonSelectOption><IonSelectOption value="BSBA">BSBA</IonSelectOption></IonSelect></label>
+                    <label className="register-field"><span>Course</span><IonSelect fill="outline" value={course} placeholder="Select your course" onIonChange={(e) => setCourse(String(e.detail.value ?? ''))} required interface="popover">{RESEARCH_COURSE_OPTIONS.map((courseOption) => <IonSelectOption key={courseOption.value} value={courseOption.value}>{courseOption.label}</IonSelectOption>)}</IonSelect></label>
 
                   </div>
 
@@ -3383,6 +5414,7 @@ function App() {
                     <label className="register-field"><span>Section</span><IonInput fill="outline" value={section} placeholder="e.g. A" onIonInput={(e) => setSection(String(e.detail.value ?? ''))} required maxlength={50} /></label>
 
                   </div>
+                  </>}
 
                 </>}
 
@@ -3391,6 +5423,8 @@ function App() {
                 {isRegister && <label className="register-field full-field"><span>Username</span><IonInput fill="outline" value={username} placeholder="Choose your username" autocomplete="username" onIonInput={(e) => setUsername(String(e.detail.value ?? ''))} required minlength={3} maxlength={50} /></label>}
 
                 <label className="register-field full-field"><span>Password</span><div className="password-input-wrap"><IonInput fill="outline" type={showPassword ? 'text' : 'password'} value={password} placeholder={isRegister ? 'Create a secure password' : 'Enter your password'} autocomplete={isRegister ? 'new-password' : 'current-password'} onIonInput={(e) => setPassword(String(e.detail.value ?? ''))} required minlength={isRegister ? 10 : 1} maxlength={128} /><button type="button" className="password-toggle" onClick={() => setShowPassword((v) => !v)} aria-label={showPassword ? 'Hide password' : 'Show password'}>{showPassword ? 'HIDE' : 'SHOW'}</button></div></label>
+
+                {!isRegister && <label className="remember-me-option"><input type="checkbox" checked={rememberMe} onChange={(event) => setRememberMe(event.target.checked)} /><span>Remember me</span><small>Keep me signed in on this device</small></label>}
 
                 {isRegister && <label className="register-field full-field"><span>Confirm password</span><div className="password-input-wrap"><IonInput fill="outline" type={showConfirmPassword ? 'text' : 'password'} value={confirmPassword} placeholder="Enter your password again" autocomplete="new-password" onIonInput={(e) => setConfirmPassword(String(e.detail.value ?? ''))} required minlength={10} maxlength={128} /><button type="button" className="password-toggle" onClick={() => setShowConfirmPassword((v) => !v)}>{showConfirmPassword ? 'HIDE' : 'SHOW'}</button></div></label>}
 
@@ -3404,7 +5438,7 @@ function App() {
 
               <p className="switch-auth">{isRegister ? 'Already have an account?' : "Don't have an account yet?"}</p>
 
-              <IonButton expand="block" fill="clear" className="switch-button" onClick={() => { setIsRegister(!isRegister); setError(''); setNotice(''); setShowPassword(false); setShowConfirmPassword(false); }}>
+              <IonButton expand="block" fill="clear" className="switch-button" onClick={() => { setIsRegister(!isRegister); if (!isRegister) setRegisterType('student'); setError(''); setNotice(''); setShowPassword(false); setShowConfirmPassword(false); }}>
 
                 {isRegister ? 'Sign in to LibTrack' : 'Create an account'}
 
@@ -3423,6 +5457,30 @@ function App() {
   }
 
   // ---------------------------------------------------------
+
+
+  // Admin borrowing statistics loader
+  useEffect(() => {
+    if (!token || !isAdmin || page !== 'borrowingStats') return;
+    let cancelled = false;
+    const loadStats = async () => {
+      setBorrowingStatsLoading(true);
+      setBorrowingStatsError('');
+      try {
+        const response = await fetch(`${API}/reports/borrowing-statistics?academic_year=2026-2027`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const data = await readResponse(response);
+        if (!cancelled) setBorrowingStats(data);
+      } catch (error: any) {
+        if (!cancelled) setBorrowingStatsError(error?.message || 'Unable to load borrowing statistics.');
+      } finally {
+        if (!cancelled) setBorrowingStatsLoading(false);
+      }
+    };
+    void loadStats();
+    return () => { cancelled = true; };
+  }, [token, isAdmin, page]);
 
   // MAIN APP
 
@@ -3487,15 +5545,9 @@ function App() {
 
             <div className="sidebar-user">
 
-              <div className="sidebar-avatar">
-
-                {(user?.full_name || user?.name || 'U')
-
-                  .charAt(0)
-
-                  .toUpperCase()}
-
-              </div>
+              <button type="button" className="sidebar-avatar" aria-label="Preview profile photo" disabled={!user?.profile_photo_url} onClick={() => user?.profile_photo_url && setProfilePhotoPreview({ url: user.profile_photo_url, name: user.full_name || user.name || 'Profile photo' })} style={{ overflow: 'hidden', padding: 0, border: 0, cursor: user?.profile_photo_url ? 'zoom-in' : 'default' }}>
+                {user?.profile_photo_url ? <img src={user.profile_photo_url} alt="Profile" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : (user?.full_name || user?.name || 'U').charAt(0).toUpperCase()}
+              </button>
 
               <div className="sidebar-user-info">
 
@@ -3521,9 +5573,6 @@ function App() {
                   <button type="button" className={`sidebar-link ${page === 'home' ? 'selected' : ''}`} onClick={() => navigate('home')}>
                     <span>⌂</span> Home
                   </button>
-                  <button type="button" className={`sidebar-link ${page === 'categories' ? 'selected' : ''}`} onClick={() => navigate('categories')}>
-                    <span>▦</span> Book Categories
-                  </button>
                   <button type="button" className={`sidebar-link ${page === 'books' ? 'selected' : ''}`} onClick={() => navigate('books')}>
                     <span>▤</span> Book Catalog
                   </button>
@@ -3533,23 +5582,23 @@ function App() {
                   <button type="button" className={`sidebar-link ${page === 'ebooks' ? 'selected' : ''}`} onClick={() => { setSelectedEbook(null); setEbookQuery(''); navigate('ebooks'); void loadEbooks(); }}>
                     <span>▣</span> E-Book Library
                   </button>
+                  {isAdmin && <button type="button" className={`sidebar-link ${page === 'inventory' ? 'selected' : ''}`} onClick={() => { setInventoryQuery(''); navigate('inventory'); }}>
+                    <span>▥</span> Inventory
+                  </button>}
                   <button type="button" className={`sidebar-link ${page === 'borrowings' ? 'selected' : ''}`} onClick={() => navigate('borrowings')}>
                     <span>⇄</span> Borrowing Activity <span className="sidebar-count">{borrowings.length}</span>
                   </button>
+                  <button type="button" className={`sidebar-link ${page === 'lostBooks' ? 'selected' : ''}`} onClick={() => navigate('lostBooks')}>
+                    <span>⚠</span> Lost &amp; Damaged Books <span className="sidebar-count">{lostBookCases.filter((item) => item.resolution_status === 'unsettled').length}</span>
+                  </button>
                   <button type="button" className={`sidebar-link ${page === 'accounts' ? 'selected' : ''}`} onClick={() => navigate('accounts')}>
                     <span>♙</span> All Accounts <span className="sidebar-count">{accounts.length}</span>
-                  </button>
-                  <button type="button" className={`sidebar-link ${page === 'sessions' ? 'selected' : ''}`} onClick={() => navigate('sessions')}>
-                    <span>◉</span> Logged-in Accounts <span className="sidebar-count">{loginSessions.length}</span>
                   </button>
                 </>
               ) : (
                 <>
                   <button type="button" className={`sidebar-link ${page === 'home' ? 'selected' : ''}`} onClick={() => navigate('home')}>
                     <span>⌂</span> Home
-                  </button>
-                  <button type="button" className={`sidebar-link ${page === 'categories' ? 'selected' : ''}`} onClick={() => navigate('categories')}>
-                    <span>▦</span> Categories
                   </button>
                   <button type="button" className={`sidebar-link ${page === 'research' ? 'selected' : ''}`} onClick={() => navigate('research')}>
                     <span>▧</span> Research Library
@@ -3562,33 +5611,11 @@ function App() {
                   </button>
                 </>
               )}
+              <button type="button" className={`sidebar-link ${page === 'settings' ? 'selected' : ''}`} onClick={() => navigate('settings')}>
+                <span>⚙</span> Settings
+              </button>
             </nav>
 
-            <div className="sidebar-bottom">
-
-              <div className="sidebar-status">
-
-                <span className="session-online-dot" />
-
-                Account authenticated
-
-              </div>
-
-              <button
-
-                type="button"
-
-                className="sidebar-logout"
-
-                onClick={() => void logout()}
-
-              >
-
-                <span>↗</span> Log Out
-
-              </button>
-
-            </div>
 
           </aside>
 
@@ -3627,10 +5654,13 @@ function App() {
                       books: 'Book Catalog',
                       research: 'Research Library',
                       ebooks: 'E-Book Library',
+                      inventory: 'Library Inventory',
                       borrowings: isAdmin ? 'Borrowing Activity' : 'My Borrowing History',
+                      lostBooks: 'Lost & Damaged Books',
                       accounts: 'All Accounts',
                       sessions: 'Logged-in Accounts',
                       profile: 'My Profile',
+                      settings: 'Settings',
                     } as Record<string, string>)[page] || 'LibTrack'}
                   </h1>
                 </div>
@@ -3668,17 +5698,33 @@ function App() {
               <div className="topbar-action-stack">
               <div className="topbar-actions">
                 <div className="due-notification-wrap">
-                  <button className="topbar-notification" type="button" aria-label="Due date notifications" title="Book due dates" aria-expanded={showDueNotifications} onClick={() => setShowDueNotifications((open) => !open)}><IonIcon icon={notificationsOutline} aria-hidden="true" />{borrowings.filter((item) => !item.returned_at && item.status.toLowerCase() === 'borrowed' && item.due_date).length > 0 && <span className="notification-dot">{borrowings.filter((item) => !item.returned_at && item.status.toLowerCase() === 'borrowed' && item.due_date).length}</span>}</button>
+                  <button className="topbar-notification" type="button" aria-label="Notifications" title="Notifications" aria-expanded={showDueNotifications} onClick={() => { setShowDueNotifications((open) => !open); if (!isAdmin) void loadStudentNotifications(); }}><IonIcon icon={notificationsOutline} aria-hidden="true" />{((!isAdmin ? studentNotifications.filter((item) => !item.is_read).length : 0) + borrowings.filter((item) => !item.returned_at && item.status.toLowerCase() === 'borrowed' && item.due_date).length) > 0 && <span className="notification-dot">{(!isAdmin ? studentNotifications.filter((item) => !item.is_read).length : 0) + borrowings.filter((item) => !item.returned_at && item.status.toLowerCase() === 'borrowed' && item.due_date).length}</span>}</button>
                   {showDueNotifications && <div className="due-notification-panel" role="dialog" aria-label="Book due date notifications">
-                    <div className="due-notification-heading"><strong>Book Due Dates</strong><button type="button" aria-label="Close notifications" onClick={() => setShowDueNotifications(false)}>×</button></div>
+                    <div className="due-notification-heading"><strong>Notifications</strong><button type="button" aria-label="Close notifications" onClick={() => setShowDueNotifications(false)}>×</button></div>
+                    {!isAdmin && <div className="due-notification-list">
+                      {studentNotificationsLoading && <p className="due-notification-empty">Loading notifications...</p>}
+                      {!studentNotificationsLoading && studentNotifications.length === 0 && <p className="due-notification-empty">No library updates yet.</p>}
+                      {studentNotifications.map((item) => <button type="button" className={`due-notification-item ${item.is_read ? '' : 'is-soon'}`} key={`notice-${item.id}`} onClick={() => void markStudentNotificationRead(item.id)}>
+                        <span className="due-notification-book">{item.title}</span>
+                        <small style={{ whiteSpace:'normal', lineHeight:1.45 }}>{item.message}</small>
+                        <span className="due-notification-date">{item.created_at ? new Date(item.created_at).toLocaleString() : ''}{!item.is_read ? ' • NEW' : ''}</span>
+                      </button>)}
+                    </div>}
+                    <div className="due-notification-heading" style={{ borderTop:'1px solid #e5eaf0', marginTop:8, paddingTop:10 }}><strong>Book Due Dates</strong></div>
                     {borrowings.filter((item) => !item.returned_at && item.status.toLowerCase() === 'borrowed' && item.due_date).length === 0 ? <p className="due-notification-empty">No upcoming book due dates.</p> : <div className="due-notification-list">
                       {borrowings.filter((item) => !item.returned_at && item.status.toLowerCase() === 'borrowed' && item.due_date).sort((a, b) => a.due_date.localeCompare(b.due_date)).map((item) => { const due = new Date(`${item.due_date}T00:00:00`); const today = new Date(); today.setHours(0,0,0,0); const days = Math.round((due.getTime() - today.getTime()) / 86400000); const book = books.find((entry) => entry.id === item.book_id); return <button type="button" className={`due-notification-item ${days < 0 ? 'is-overdue' : days <= 2 ? 'is-soon' : ''}`} key={item.id} onClick={() => { setShowDueNotifications(false); navigate('borrowings'); }}><span className="due-notification-book">{book?.title || `Book #${item.book_id}`}</span><span className="due-notification-date">Due: {item.due_date}</span><small>{days < 0 ? `${Math.abs(days)} day(s) overdue` : days === 0 ? 'Due today' : days === 1 ? 'Due tomorrow' : `Due in ${days} days`}</small></button>; })}
                     </div>}
                   </div>}
                 </div>
                 <button className="topbar-account" type="button" title="Open profile" aria-label="Open user profile" onClick={() => { setShowDueNotifications(false); navigate('profile'); }}>
-                  <span className="user-dot">{(user?.full_name || user?.name || user?.email || 'U').trim().charAt(0).toUpperCase()}</span>
-                  <span className="topbar-user-copy"><strong>{(user?.full_name || user?.name || user?.email || 'Library User').split(' ')[0]}</strong><small>{isAdmin ? 'Administrator' : 'Student'}</small></span>
+                  <span className="user-dot" style={{ overflow: 'hidden', padding: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flex: '0 0 38px' }}>
+                    {user?.profile_photo_url ? (
+                      <img src={user.profile_photo_url} alt="Profile" style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '50%' }} />
+                    ) : (
+                      (user?.full_name || user?.name || user?.email || 'U').trim().charAt(0).toUpperCase()
+                    )}
+                  </span>
+                  <span className="topbar-user-copy"><strong>{(user?.full_name || user?.name || user?.email || 'Library User').split(' ')[0]}</strong><small>{isAdmin ? 'Administrator' : isFaculty ? 'Faculty' : 'Student'}</small></span>
                   {isAdmin && <IonBadge color="warning">ADMIN</IonBadge>}
                 </button>
               </div>
@@ -3720,29 +5766,717 @@ function App() {
 
               )}
 
+              {/* SETTINGS */}
+              {page === 'settings' && (
+                <section className="settings-page">
+                  {!isAdmin && (
+                    <>
+                      <section className="settings-account-overview">
+                        <div className="settings-avatar" style={{ overflow:'hidden', padding:0, display:'grid', placeItems:'center' }}>
+                          {user?.profile_photo_url ? (
+                            <img src={user.profile_photo_url} alt="Profile photo" style={{ width:'100%', height:'100%', objectFit:'cover', display:'block' }} />
+                          ) : (
+                            (user?.full_name || user?.name || user?.email || 'U').trim().charAt(0).toUpperCase()
+                          )}
+                        </div>
+                        <div className="settings-account-info">
+                          <span className="settings-kicker">SIGNED IN ACCOUNT</span>
+                          <h3>{user?.full_name || user?.name || 'Library User'}</h3>
+                          <p>{user?.email || 'No email provided'}</p>
+                          <div className="settings-account-tags">
+                            <span className="settings-role">{accountRoleLabel} ACCOUNT</span>
+                            {isStudent && user?.course && <span>{user.course}</span>}
+                            {isStudent && user?.year && <span>{user.year}{user?.section ? ` · ${user.section}` : ''}</span>}
+                          </div>
+                        </div>
+                        <IonButton className="settings-profile-button" onClick={() => navigate('profile')}>View Profile</IonButton>
+                      </section>
+
+                      <div className="settings-section-title">
+                        <div><span>{isFaculty ? 'FACULTY ACCOUNT' : 'STUDENT ACCOUNT'}</span><h3>Account & Support</h3></div>
+                        <p>Choose an option to open its own page.</p>
+                      </div>
+                      <div className="settings-shortcut-grid">
+                        <button className="settings-shortcut" onClick={() => navigate('profile')}>
+                          <span className="settings-shortcut-icon">👤</span><span><strong>Profile Information</strong><small>View and update your personal details</small></span><b>›</b>
+                        </button>
+                        <button className="settings-shortcut" onClick={() => navigate('user-password')}>
+                          <span className="settings-shortcut-icon">🔑</span><span><strong>Change Password</strong><small>Update your account password securely</small></span><b>›</b>
+                        </button>
+                        <button className="settings-shortcut" onClick={() => navigate('user-guidelines')}>
+                          <span className="settings-shortcut-icon">📚</span><span><strong>Library Guidelines</strong><small>Borrowing rules and library reminders</small></span><b>›</b>
+                        </button>
+                        <button className="settings-shortcut" onClick={() => navigate('user-library-schedule')}>
+                          <span className="settings-shortcut-icon">🗓️</span><span><strong>Library Schedule</strong><small>Opening hours, closed days, and holidays</small></span><b>›</b>
+                        </button>
+                        <button className="settings-shortcut" onClick={() => navigate('user-requests')}>
+                          <span className="settings-shortcut-icon">📋</span><span><strong>My Requests</strong><small>Track your borrowing requests and status</small></span><b>›</b>
+                        </button>
+                        <button className="settings-shortcut" onClick={() => navigate('user-saved-books')}>
+                          <span className="settings-shortcut-icon">🔖</span><span><strong>Saved Books</strong><small>Keep a personal list of books to revisit</small></span><b>›</b>
+                        </button>
+                        <button className="settings-shortcut" onClick={() => { navigate('user-notifications'); void loadStudentNotifications(); }}>
+                          <span className="settings-shortcut-icon">🔔</span><span><strong>Notification History</strong><small>Open and read your library notifications</small></span><b>›</b>
+                        </button>
+                        <button className="settings-shortcut" onClick={() => navigate('user-preferences')}>
+                          <span className="settings-shortcut-icon">⚙️</span><span><strong>App Preferences</strong><small>Choose which updates you want to see</small></span><b>›</b>
+                        </button>
+                        <button className="settings-shortcut" onClick={() => navigate('user-about')}>
+                          <span className="settings-shortcut-icon">ℹ️</span><span><strong>About LibTrack</strong><small>Learn about the library portal</small></span><b>›</b>
+                        </button>
+                        <button className="settings-shortcut" onClick={() => navigate('user-support')}>
+                          <span className="settings-shortcut-icon">❓</span><span><strong>Help &amp; Support</strong><small>FAQs and help using LibTrack</small></span><b>›</b>
+                        </button>
+                        <button className="settings-shortcut" onClick={() => { setProblemDescription(''); setProblemReportMessage(''); navigate('user-report'); }}>
+                          <span className="settings-shortcut-icon">💬</span><span><strong>Report a Problem</strong><small>Describe an account or app issue</small></span><b>›</b>
+                        </button>
+                        <button className="settings-shortcut" onClick={() => navigate('user-privacy')}>
+                          <span className="settings-shortcut-icon">🛡️</span><span><strong>Privacy &amp; Security</strong><small>Account safety and privacy guidance</small></span><b>›</b>
+                        </button>
+                        <button className="settings-shortcut danger" onClick={() => void confirmLogout()}>
+                          <span className="settings-shortcut-icon">🚪</span><span><strong>Log Out</strong><small>End your LibTrack session securely</small></span><b>›</b>
+                        </button>
+                      </div>
+
+                    </>
+                  )}
+                  {isAdmin && (
+                    <section className="settings-admin-panel" style={{ padding:0, border:0, background:'transparent', boxShadow:'none' }}>
+                      <div className="settings-section-title settings-admin-links-title" style={{ marginTop:22 }}>
+                        <div><span>ADMINISTRATOR ONLY</span><h3>Manage LibTrack</h3></div>
+                      </div>
+                      <div className="settings-shortcut-grid admin-shortcuts">
+                        <button className="settings-shortcut" onClick={() => navigate('profile')}><span className="settings-shortcut-icon">👤</span><span><strong>Admin Profile</strong><small>View your administrator account</small></span><b>›</b></button>
+                        <button className="settings-shortcut" onClick={() => navigate('admin-password')}><span className="settings-shortcut-icon">🔐</span><span><strong>Change Password</strong><small>Update your account password</small></span><b>›</b></button>
+                        <button className="settings-shortcut" onClick={() => navigate('accounts')}><span className="settings-shortcut-icon">♙</span><span><strong>All Accounts</strong><small>View student and administrator accounts</small></span><b>›</b></button>
+                        <button className="settings-shortcut" onClick={() => navigate('sessions')}><span className="settings-shortcut-icon">◉</span><span><strong>Logged-in Accounts</strong><small>Review active login sessions</small></span><b>›</b></button>
+                        <button className="settings-shortcut" onClick={() => navigate('admin-library-schedule')}><span className="settings-shortcut-icon">🕒</span><span><strong>Library Schedule</strong><small>Set daily library opening hours</small></span><b>›</b></button>
+                        <button className="settings-shortcut" onClick={() => navigate('admin-borrowing-schedule')}><span className="settings-shortcut-icon">📚</span><span><strong>Borrowing Schedule</strong><small>Set borrowing days and hours</small></span><b>›</b></button>
+                        <button className="settings-shortcut" onClick={() => navigate('admin-weekend-notice')}><span className="settings-shortcut-icon">🔔</span><span><strong>Weekend Notice</strong><small>Configure student pop-up reminders</small></span><b>›</b></button>
+                        <button className="settings-shortcut" onClick={() => { setInventoryQuery(''); navigate('inventory'); }}><span className="settings-shortcut-icon">▥</span><span><strong>Library Inventory</strong><small>Books, research, and e-books</small></span><b>›</b></button>
+                        <button className="settings-shortcut" onClick={() => navigate('research')}><span className="settings-shortcut-icon">🗂️</span><span><strong>Research Courses</strong><small>Manage research materials</small></span><b>›</b></button>
+                        <button className="settings-shortcut" onClick={() => { setSelectedEbook(null); setEbookQuery(''); navigate('ebooks'); void loadEbooks(); }}><span className="settings-shortcut-icon">📘</span><span><strong>E-Book Collections</strong><small>Manage digital collections</small></span><b>›</b></button>
+                        <button className="settings-shortcut" onClick={() => navigate('borrowings')}><span className="settings-shortcut-icon">⇄</span><span><strong>Borrowing Activity</strong><small>Review all book borrowing records</small></span><b>›</b></button>
+                        <button className="settings-shortcut" onClick={() => navigate('borrowingStats')}><span className="settings-shortcut-icon">▤</span><span><strong>Borrowing Statistics</strong><small>View borrowing reports and summaries</small></span><b>›</b></button>
+                        <button className="settings-shortcut" onClick={() => navigate('lostBooks')}><span className="settings-shortcut-icon">⚠</span><span><strong>Lost &amp; Damaged Books</strong><small>Review lost and damaged book cases</small></span><b>›</b></button>
+                        <button className="settings-shortcut" onClick={() => { navigate('admin-problem-reports'); void loadAdminProblemReports(); }}><span className="settings-shortcut-icon">💬</span><span><strong>Problem Reports</strong><small>Review student and faculty reports</small></span><b>›</b></button>
+                        <button className="settings-shortcut danger" onClick={() => void confirmLogout()}><span className="settings-shortcut-icon">🚪</span><span><strong>Log Out</strong><small>End this admin session</small></span><b>›</b></button>
+                      </div>
+                    </section>
+                  )}
+                  {!isAdmin && <div className="settings-footer-note"><span>🛡️</span><p>Your account information is managed by the LibTrack administrator. If any registered detail is incorrect, please contact your library administrator.</p></div>}
+                </section>
+              )}
+
+
+              {/* STUDENT AND FACULTY SETTINGS: SEPARATE PAGES */}
+              {!isAdmin && page === 'user-password' && (
+                <section className="settings-page">
+                  <button type="button" className="settings-shortcut" onClick={navigateBack}><b>‹</b><span><strong>Back to Settings</strong><small>Return to Account & Support</small></span></button>
+                  <div className="settings-section-title"><div><span>ACCOUNT SECURITY</span><h3>Change Password</h3></div><p>Update your password securely. Use a password you have not used before.</p></div>
+                                    <article className="settings-card" style={{ width:'100%' }}>
+                    <form onSubmit={(event) => void handleChangeAccountPassword(event)} style={{ display:'grid', gap:12 }}>
+                      <label className="settings-field">Current Password
+                        <div style={{ display:'flex', gap:8, alignItems:'center' }}>
+                          <input type={showCurrentAccountPassword ? 'text' : 'password'} autoComplete="current-password" placeholder="Enter current password" value={currentAccountPassword} onChange={(event) => { setCurrentAccountPassword(event.target.value); setChangePasswordMessage(''); }} required style={{ flex:1, minWidth:0 }} />
+                          <button type="button" onClick={() => setShowCurrentAccountPassword((value) => !value)}>{showCurrentAccountPassword ? 'Hide' : 'Show'}</button>
+                        </div>
+                      </label>
+                      <label className="settings-field">New Password <small>At least 10 characters.</small>
+                        <div style={{ display:'flex', gap:8, alignItems:'center' }}>
+                          <input type={showNewAccountPassword ? 'text' : 'password'} autoComplete="new-password" minLength={10} placeholder="Enter new password" value={newAccountPassword} onChange={(event) => { setNewAccountPassword(event.target.value); setChangePasswordMessage(''); }} required style={{ flex:1, minWidth:0 }} />
+                          <button type="button" onClick={() => setShowNewAccountPassword((value) => !value)}>{showNewAccountPassword ? 'Hide' : 'Show'}</button>
+                        </div>
+                      </label>
+                      <label className="settings-field">Confirm New Password
+                        <div style={{ display:'flex', gap:8, alignItems:'center' }}>
+                          <input type={showConfirmAccountPassword ? 'text' : 'password'} autoComplete="new-password" minLength={10} placeholder="Confirm new password" value={confirmAccountPassword} onChange={(event) => { setConfirmAccountPassword(event.target.value); setChangePasswordMessage(''); }} required style={{ flex:1, minWidth:0 }} />
+                          <button type="button" onClick={() => setShowConfirmAccountPassword((value) => !value)}>{showConfirmAccountPassword ? 'Hide' : 'Show'}</button>
+                        </div>
+                      </label>
+                      <IonButton type="submit" expand="block" disabled={changePasswordSaving}>{changePasswordSaving ? 'Saving Password...' : 'Save New Password'}</IonButton>
+                      {changePasswordMessage && <p role="status" aria-live="polite">{changePasswordMessage}</p>}
+                    </form>
+                  </article>
+                </section>
+              )}
+              {!isAdmin && page === 'user-notifications' && (
+                <section className="settings-page">
+                  <button type="button" className="settings-shortcut" onClick={navigateBack}><b>‹</b><span><strong>Back to Settings</strong><small>Return to Account & Support</small></span></button>
+                  <div className="settings-section-title">
+                    <div><span>LIBRARY UPDATES</span><h3>Notification History</h3></div>
+                    <p>Tap any notification to open and read its full message.</p>
+                  </div>
+                  <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:10, marginBottom:12 }}>
+                    <span style={{ color:'#73849a', fontSize:13 }}>{studentNotifications.length} notification(s)</span>
+                    <IonButton size="small" fill="outline" onClick={() => void loadStudentNotifications()} disabled={studentNotificationsLoading}>
+                      {studentNotificationsLoading ? 'Refreshing...' : 'Refresh'}
+                    </IonButton>
+                  </div>
+                  {studentNotificationsLoading && studentNotifications.length === 0 && (
+                    <article className="settings-card"><p>Loading your notification history...</p></article>
+                  )}
+                  {!studentNotificationsLoading && studentNotifications.length === 0 && (
+                    <article className="settings-card" style={{ textAlign:'center', padding:28 }}>
+                      <div style={{ fontSize:34, marginBottom:8 }}>🔔</div>
+                      <h3 style={{ margin:'0 0 6px' }}>No notifications yet</h3>
+                      <p style={{ margin:0, color:'#7b8ba0' }}>Library announcements and account updates will appear here.</p>
+                    </article>
+                  )}
+                  <div style={{ display:'grid', gap:11 }}>
+                    {studentNotifications.map((item) => (
+                      <button
+                        key={`history-${item.id}`}
+                        type="button"
+                        onClick={() => {
+                          setSelectedStudentNotification(item);
+                          if (!item.is_read) void markStudentNotificationRead(item.id);
+                        }}
+                        style={{
+                          width:'100%', textAlign:'left', display:'grid', gridTemplateColumns:'44px minmax(0,1fr) 20px',
+                          alignItems:'center', gap:12, padding:14, borderRadius:15,
+                          border:item.is_read ? '1px solid #e1e8f0' : '1px solid #e9c96e',
+                          background:item.is_read ? '#fff' : '#fffaf0', color:'#193550',
+                          boxShadow:'0 3px 12px rgba(25,53,80,.045)', cursor:'pointer'
+                        }}
+                      >
+                        <span style={{ width:42, height:42, borderRadius:12, display:'grid', placeItems:'center', background:item.is_read ? '#eef3f8' : '#fff1c9', fontSize:20 }}>
+                          {item.notification_type === 'lost_damaged_book' ? '⚠️' : item.notification_type.toLowerCase().includes('borrow') ? '📚' : '🔔'}
+                        </span>
+                        <span style={{ minWidth:0, display:'grid', gap:4 }}>
+                          <strong style={{ fontSize:14, lineHeight:1.35 }}>{item.title || 'Library Notification'}</strong>
+                          <span style={{ fontSize:12, color:'#718198', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{item.message}</span>
+                          <span style={{ fontSize:11, color:'#8a98aa' }}>{item.created_at ? new Date(item.created_at).toLocaleString() : 'Date unavailable'}{!item.is_read ? ' · NEW' : ' · READ'}</span>
+                        </span>
+                        {!item.is_read && <span aria-label="Unread" style={{ width:9, height:9, borderRadius:'50%', background:'#d49b19', justifySelf:'center' }} />}
+                        {item.is_read && <span style={{ color:'#9aa8b8', fontSize:18, justifySelf:'center' }}>›</span>}
+                      </button>
+                    ))}
+                  </div>
+                  {selectedStudentNotification && (
+                    <div
+                      role="presentation"
+                      onClick={() => setSelectedStudentNotification(null)}
+                      style={{ position:'fixed', inset:0, zIndex:16000, display:'grid', placeItems:'center', padding:18, background:'rgba(10,28,48,.62)', backdropFilter:'blur(4px)' }}
+                    >
+                      <section
+                        role="dialog"
+                        aria-modal="true"
+                        aria-labelledby="notification-detail-title"
+                        onClick={(event) => event.stopPropagation()}
+                        style={{ width:'min(100%, 460px)', maxHeight:'min(82vh, 680px)', overflowY:'auto', background:'#fff', color:'#193550', borderRadius:20, padding:22, boxShadow:'0 24px 70px rgba(10,30,52,.3)' }}
+                      >
+                        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:12 }}>
+                          <span style={{ width:48, height:48, borderRadius:14, background:'#fff4d7', display:'grid', placeItems:'center', fontSize:23 }}>
+                            {selectedStudentNotification.notification_type === 'lost_damaged_book' ? '⚠️' : selectedStudentNotification.notification_type.toLowerCase().includes('borrow') ? '📚' : '🔔'}
+                          </span>
+                          <button type="button" aria-label="Close notification" onClick={() => setSelectedStudentNotification(null)} style={{ border:0, borderRadius:9, width:36, height:36, background:'#eef2f7', color:'#243b55', fontSize:22, cursor:'pointer' }}>×</button>
+                        </div>
+                        <span style={{ display:'block', marginTop:16, color:'#b18425', fontSize:10, fontWeight:850, letterSpacing:'.13em' }}>LIBTRACK NOTIFICATION</span>
+                        <h3 id="notification-detail-title" style={{ margin:'7px 0 8px', fontSize:21, lineHeight:1.3 }}>{selectedStudentNotification.title || 'Library Notification'}</h3>
+                        <p style={{ margin:'0 0 16px', color:'#7b8ba0', fontSize:12 }}>{selectedStudentNotification.created_at ? new Date(selectedStudentNotification.created_at).toLocaleString() : 'Date unavailable'}</p>
+                        <div style={{ padding:16, borderRadius:13, background:'#f5f8fc', color:'#40566f', lineHeight:1.65, fontSize:14, whiteSpace:'pre-wrap', overflowWrap:'anywhere' }}>
+                          {selectedStudentNotification.message || 'No additional message was provided.'}
+                        </div>
+                        <div style={{ marginTop:14, display:'flex', justifyContent:'space-between', alignItems:'center', gap:10 }}>
+                          <span style={{ fontSize:11, color:'#7b8ba0' }}>{selectedStudentNotification.is_read ? 'Read notification' : 'Marking as read...'}</span>
+                          <IonButton type="button" onClick={() => setSelectedStudentNotification(null)}>Close</IonButton>
+                        </div>
+                      </section>
+                    </div>
+                  )}
+                </section>
+              )}
+              {!isAdmin && page === 'user-guidelines' && (
+                <section className="settings-page">
+                  <button type="button" className="settings-shortcut" onClick={navigateBack}><b>‹</b><span><strong>Back to Settings</strong><small>Return to Account &amp; Support</small></span></button>
+                  <div className="settings-section-title"><div><span>LIBRARY INFORMATION</span><h3>Library Guidelines</h3></div><p>Helpful reminders for using the NEUST Peñaranda Off-Campus Library.</p></div>
+                  <div style={{ display:'grid', gap:12 }}>
+                    <article className="settings-card" style={{ width:'100%' }}>
+                      <div className="settings-card-top"><span className="settings-card-icon gold">📖</span><span className="settings-card-label">BORROWING BOOKS</span></div>
+                      <h3>Before borrowing</h3>
+                      <ul style={{ paddingLeft:20, color:'#718198', lineHeight:1.8 }}>
+                        <li>Check the book details and availability in the Book Catalog.</li>
+                        <li>Make sure you are signed in using your own LibTrack account.</li>
+                        <li>Review the borrowing information and due date shown in your account.</li>
+                      </ul>
+                    </article>
+                    <article className="settings-card" style={{ width:'100%' }}>
+                      <div className="settings-card-top"><span className="settings-card-icon gold">🗓️</span><span className="settings-card-label">RETURNING BOOKS</span></div>
+                      <h3>Return reminders</h3>
+                      <ul style={{ paddingLeft:20, color:'#718198', lineHeight:1.8 }}>
+                        <li>Return borrowed books on or before the due date recorded in LibTrack.</li>
+                        <li>Keep borrowed materials clean and in good condition.</li>
+                        <li>Contact the library staff promptly if a book is lost or damaged.</li>
+                      </ul>
+                    </article>
+                    <article className="settings-card" style={{ width:'100%' }}>
+                      <div className="settings-card-top"><span className="settings-card-icon gold">🏛️</span><span className="settings-card-label">LIBRARY POLICIES</span></div>
+                      <h3>Follow official library instructions</h3>
+                      <p style={{ color:'#718198', lineHeight:1.7 }}>Borrowing limits, loan periods, penalties, opening hours, and other official rules are determined by the library administrator or librarian. Follow the latest instructions provided by the NEUST Peñaranda Off-Campus Library.</p>
+                    </article>
+                  </div>
+                </section>
+              )}
+              {!isAdmin && page === 'user-support' && (
+                <section className="settings-page">
+                  <button type="button" className="settings-shortcut" onClick={navigateBack}><b>‹</b><span><strong>Back to Settings</strong><small>Return to Account &amp; Support</small></span></button>
+                  <div className="settings-section-title"><div><span>NEED ASSISTANCE?</span><h3>Help &amp; Support</h3></div><p>Quick answers to common questions about using LibTrack.</p></div>
+                  <div style={{ display:'grid', gap:11 }}>
+                    {[
+                      ['How do I find a book?','Open the Book Catalog or Categories, then browse or search for the title you need. Open a book to view its details and availability.'],
+                      ['Where can I see my borrowed books?','Open your borrowing history to review your current and previous borrowing records, including due-date information when available.'],
+                      ['Where can I read library announcements?','Open Notification History in Settings or use the notification icon to view library updates.'],
+                      ['How do I update my account details?','Open Profile Information. If a detail cannot be edited, contact the library administrator for assistance.'],
+                      ['What if I cannot sign in?','Check that your account credentials are correct. If the issue continues, ask the library administrator to help verify your account.'],
+                      ['Who can help with library rules?','For official borrowing policies, due dates, penalties, and library schedules, ask the NEUST Peñaranda Off-Campus librarian or administrator.']
+                    ].map(([question, answer], index) => (
+                      <details key={`support-faq-${index}`} className="settings-card" style={{ width:'100%', padding:16 }}>
+                        <summary style={{ cursor:'pointer', color:'#193550', fontWeight:750, lineHeight:1.5 }}>{question}</summary>
+                        <p style={{ margin:'10px 0 0', color:'#718198', lineHeight:1.7 }}>{answer}</p>
+                      </details>
+                    ))}
+                  </div>
+                </section>
+              )}
+              {!isAdmin && page === 'user-report' && (
+                <section className="settings-page">
+                  <button type="button" className="settings-shortcut" onClick={navigateBack}><b>‹</b><span><strong>Back to Settings</strong><small>Return to Account &amp; Support</small></span></button>
+                  <div className="settings-section-title"><div><span>FEEDBACK &amp; ASSISTANCE</span><h3>Report a Problem</h3></div><p>Describe the issue so you can share the details with the library administrator.</p></div>
+                  <form className="settings-card" style={{ width:'100%', display:'grid', gap:14 }} onSubmit={async (event) => {
+                    event.preventDefault();
+                    if (!token || !problemDescription.trim() || problemReportSubmitting) return;
+                    setProblemReportSubmitting(true);
+                    setProblemReportMessage('');
+                    try {
+                      const response = await fetch(`${API}/problem-reports`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                        body: JSON.stringify({ category: problemCategory, description: problemDescription.trim() }),
+                      });
+                      const data = await response.json().catch(() => ({}));
+                      if (!response.ok) throw new Error(data.detail || data.message || `Submission failed (${response.status}).`);
+                      setProblemReportMessage(`Your report #${data.report?.id ?? ''} was submitted successfully. The library administrator can now review it.`);
+                      setProblemDescription('');
+                    } catch (error) {
+                      setProblemReportMessage(error instanceof Error ? error.message : 'Unable to submit your report. Please try again.');
+                    } finally {
+                      setProblemReportSubmitting(false);
+                    }
+                  }}>
+                    <label className="settings-field">Problem Category
+                      <select value={problemCategory} onChange={(event) => { setProblemCategory(event.target.value); setProblemReportMessage(''); }} style={{ display:'block', width:'100%', marginTop:7, padding:12, border:'1px solid #dce4ed', borderRadius:10, background:'#fff', color:'#193550' }}>
+                        <option>Account or profile</option>
+                        <option>Login or password</option>
+                        <option>Book catalog or book details</option>
+                        <option>Borrowing or return record</option>
+                        <option>Research Library or E-Books</option>
+                        <option>Notification</option>
+                        <option>Technical issue</option>
+                        <option>Other</option>
+                      </select>
+                    </label>
+                    <label className="settings-field">Describe the problem
+                      <textarea value={problemDescription} onChange={(event) => { setProblemDescription(event.target.value); setProblemReportMessage(''); }} rows={6} maxLength={2000} required placeholder="Tell us what happened and which page or feature you were using..." style={{ display:'block', width:'100%', marginTop:7, padding:12, border:'1px solid #dce4ed', borderRadius:10, resize:'vertical', boxSizing:'border-box', font:'inherit', color:'#193550' }} />
+                    </label>
+                    <p style={{ margin:0, color:'#8a98aa', fontSize:12 }}>{problemDescription.length}/2000 characters</p>
+                    <IonButton
+                      type="submit"
+                      expand="block"
+                      className="submit-problem-report-button"
+                      disabled={!problemDescription.trim() || problemReportSubmitting}
+                      style={{
+                        '--background': '#f6c445',
+                        '--background-hover': '#eab52e',
+                        '--background-activated': '#dca51e',
+                        '--background-focused': '#eab52e',
+                        '--color': '#17324d',
+                        '--color-activated': '#17324d',
+                        '--color-focused': '#17324d',
+                        '--border-radius': '13px',
+                        '--box-shadow': '0 4px 12px rgba(23, 50, 77, 0.16)',
+                        fontWeight: 800,
+                        fontSize: '16px',
+                        letterSpacing: '0.2px',
+                        minHeight: '52px',
+                        opacity: 1,
+                      } as React.CSSProperties}
+                    >
+                      {problemReportSubmitting ? 'Submitting your report...' : 'SUBMIT REPORT'}
+                    </IonButton>
+                    {!problemDescription.trim() && !problemReportSubmitting && (
+                      <p style={{ margin:'-6px 0 0', color:'#66788d', fontSize:13, lineHeight:1.5 }}>
+                        Enter a description above to enable the Submit Report button.
+                      </p>
+                    )}
+                    {problemReportMessage && <p role="status" aria-live="polite" style={{ margin:0, color:problemReportMessage.toLowerCase().includes('successfully') ? '#087a43' : '#b42318', lineHeight:1.6 }}>{problemReportMessage}</p>}
+                    <p style={{ margin:0, color:'#8a98aa', fontSize:12, lineHeight:1.6 }}>Your report will be sent securely to the LibTrack server for the library administrator to review.</p>
+                  </form>
+                </section>
+              )}
+              {!isAdmin && page === 'user-privacy' && (
+                <section className="settings-page">
+                  <button type="button" className="settings-shortcut" onClick={navigateBack}><b>‹</b><span><strong>Back to Settings</strong><small>Return to Account &amp; Support</small></span></button>
+                  <div className="settings-section-title"><div><span>ACCOUNT PROTECTION</span><h3>Privacy &amp; Security</h3></div><p>Simple steps to help keep your LibTrack account and information safe.</p></div>
+                  <div style={{ display:'grid', gap:12 }}>
+                    <article className="settings-card" style={{ width:'100%' }}>
+                      <div className="settings-card-top"><span className="settings-card-icon violet">🔐</span><span className="settings-card-label">KEEP YOUR ACCOUNT SAFE</span></div>
+                      <h3>Protect your sign-in details</h3>
+                      <ul style={{ paddingLeft:20, color:'#718198', lineHeight:1.8 }}>
+                        <li>Do not share your password with other people.</li>
+                        <li>Use Change Password if you believe someone else knows your password.</li>
+                        <li>Always log out when using a shared or public device.</li>
+                        <li>Keep your account and profile information accurate.</li>
+                      </ul>
+                    </article>
+                    <article className="settings-card" style={{ width:'100%' }}>
+                      <div className="settings-card-top"><span className="settings-card-icon violet">🗂️</span><span className="settings-card-label">ACCOUNT INFORMATION</span></div>
+                      <h3>Your library account</h3>
+                      <p style={{ color:'#718198', lineHeight:1.7 }}>LibTrack uses account and library activity information to provide services such as profile access, borrowing records, and notifications. Only enter information needed for your library account, and contact the library administrator if you notice an incorrect detail.</p>
+                    </article>
+                    <article className="settings-card" style={{ width:'100%' }}>
+                      <div className="settings-card-top"><span className="settings-card-icon violet">🛡️</span><span className="settings-card-label">NEED HELP?</span></div>
+                      <h3>Report an account concern</h3>
+                      <p style={{ color:'#718198', lineHeight:1.7 }}>If you notice unfamiliar activity or think your account may be at risk, change your password and contact the library administrator.</p>
+                      <IonButton expand="block" fill="outline" onClick={() => navigate('user-report')}>Report a Problem</IonButton>
+                    </article>
+                  </div>
+                </section>
+              )}
+              {!isAdmin && page === 'user-library-schedule' && (
+                <section className="settings-page">
+                  <button type="button" className="settings-shortcut" onClick={navigateBack}><b>‹</b><span><strong>Back to Settings</strong><small>Return to Account &amp; Support</small></span></button>
+                  <div className="settings-section-title"><div><span>PLAN YOUR VISIT</span><h3>Library Schedule</h3></div><p>Check the latest opening hours configured by the library administrator.</p></div>
+                  <article className="settings-card" style={{ width:'100%' }}>
+                    <div className="settings-card-top"><span className="settings-card-icon gold">🗓️</span><span className="settings-card-label">WEEKLY OPENING HOURS</span></div>
+                    {Object.entries(librarySchedule).map(([day, hours]) => (
+                      <div key={day} style={{ display:'flex', justifyContent:'space-between', gap:12, padding:'12px 0', borderBottom:'1px solid #edf1f5', color:'#526579' }}>
+                        <strong style={{ color:'#193550' }}>{day}</strong>
+                        <span>{hours.closed ? 'Closed' : `${hours.open} – ${hours.close}`}</span>
+                      </div>
+                    ))}
+                    <p style={{ color:'#8795a7', fontSize:12, lineHeight:1.6, margin:'14px 0 0' }}>Schedules may change during holidays or special announcements. Please follow the latest notice from the library.</p>
+                  </article>
+                </section>
+              )}
+              {!isAdmin && page === 'user-requests' && (
+                <section className="settings-page">
+                  <button type="button" className="settings-shortcut" onClick={navigateBack}><b>‹</b><span><strong>Back to Settings</strong><small>Return to Account &amp; Support</small></span></button>
+                  <div className="settings-section-title"><div><span>YOUR LIBRARY ACTIVITY</span><h3>My Requests</h3></div><p>Review the status of your borrowing requests and past borrowing records.</p></div>
+                  <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:10, marginBottom:12 }}>
+                    <span style={{ color:'#718198', fontSize:13 }}>{borrowings.length} request/record(s)</span>
+                    <IonButton size="small" fill="outline" onClick={() => navigate('borrowings')}>Full Borrowing History</IonButton>
+                  </div>
+                  {borrowingsLoading && <article className="settings-card"><p>Loading your requests...</p></article>}
+                  {borrowingsError && <article className="settings-card"><p role="alert">Could not load requests: {borrowingsError}</p></article>}
+                  {!borrowingsLoading && !borrowingsError && borrowings.length === 0 && (
+                    <article className="settings-card" style={{ width:'100%', textAlign:'center', padding:26 }}>
+                      <div style={{ fontSize:34 }}>📋</div><h3>No requests yet</h3><p style={{ color:'#718198' }}>Your borrowing requests will appear here after you request a book.</p>
+                      <IonButton fill="solid" color="primary" className="browse-book-button" style={{ "--background": "#173b5e", "--background-hover": "#102d49", "--color": "#ffffff", "--color-activated": "#ffffff", "--color-focused": "#ffffff", fontWeight: 700, letterSpacing: "0.2px" } as React.CSSProperties} onClick={() => navigate('categories')}>Browse Book</IonButton>
+                    </article>
+                  )}
+                  <div style={{ display:'grid', gap:10 }}>
+                    {borrowings.map((record) => {
+                      const relatedBook = books.find((book) => book.id === record.book_id);
+                      const status = String(record.status || 'pending').replace(/_/g, ' ');
+                      return (
+                        <article key={`my-request-${record.id}`} className="settings-card" style={{ width:'100%', padding:16 }}>
+                          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:12 }}>
+                            <div><strong style={{ color:'#193550' }}>{relatedBook?.title || `Book #${record.book_id}`}</strong><p style={{ margin:'5px 0', color:'#718198', fontSize:12 }}>Request / Record #{record.id}</p></div>
+                            <IonBadge color={/return|complete/i.test(status) ? 'success' : /overdue|lost|damage/i.test(status) ? 'danger' : 'primary'}>{status}</IonBadge>
+                          </div>
+                          <div style={{ display:'flex', justifyContent:'space-between', gap:10, marginTop:10, color:'#718198', fontSize:12 }}>
+                            <span>Requested/Borrowed: {record.borrowed_at ? new Date(record.borrowed_at).toLocaleDateString() : 'Not available'}</span>
+                            <span>Due: {record.due_date ? new Date(record.due_date).toLocaleDateString() : 'Not set'}</span>
+                          </div>
+                        </article>
+                      );
+                    })}
+                  </div>
+                </section>
+              )}
+              {!isAdmin && page === 'user-saved-books' && (
+                <section className="settings-page">
+                  <button type="button" className="settings-shortcut" onClick={navigateBack}><b>‹</b><span><strong>Back to Settings</strong><small>Return to Account &amp; Support</small></span></button>
+                  <div className="settings-section-title"><div><span>YOUR PERSONAL LIST</span><h3>Saved Books</h3></div><p>Books you saved from the Book Catalog for quick reference.</p></div>
+                  {savedBookIds.length === 0 && (
+                    <article className="settings-card" style={{ width:'100%', textAlign:'center', padding:26 }}>
+                      <div style={{ fontSize:34 }}>🔖</div><h3>No saved books yet</h3><p style={{ color:'#718198' }}>Open the Book Catalog and tap ☆ Save on a book you want to revisit.</p>
+                      <IonButton fill="solid" color="primary" className="browse-book-button" style={{ "--background": "#173b5e", "--background-hover": "#102d49", "--color": "#ffffff", "--color-activated": "#ffffff", "--color-focused": "#ffffff", fontWeight: 700, letterSpacing: "0.2px" } as React.CSSProperties} onClick={() => navigate('categories')}>Browse Book</IonButton>
+                    </article>
+                  )}
+                  <div style={{ display:'grid', gap:12 }}>
+                    {savedBookIds.map((bookId) => {
+                      const book = books.find((item) => item.id === bookId);
+                      if (!book) return null;
+                      return (
+                        <article key={`saved-book-${book.id}`} className="settings-card" style={{ width:'100%', display:'grid', gridTemplateColumns:'64px minmax(0,1fr)', gap:14, alignItems:'center', padding:14 }}>
+                          <div className="saved-book-cover-frame" style={{ position:'relative', width:64, minWidth:64, maxWidth:64, height:84, minHeight:84, maxHeight:84, overflow:'hidden', borderRadius:9, background:'#edf2f7', flexShrink:0, boxSizing:'border-box' }}><BookCover book={book} className="book-cover saved-book-cover" /></div>
+                          <div style={{ minWidth:0 }}>
+                            <strong style={{ color:'#193550' }}>{book.title}</strong>
+                            <p style={{ margin:'5px 0', color:'#718198', fontSize:12 }}>{book.author}</p>
+                            <p style={{ margin:'5px 0 9px', color:book.available_copies > 0 ? '#16834b' : '#b45a45', fontSize:12 }}>{book.available_copies} available</p>
+                            <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
+                              <IonButton size="small" fill="outline" onClick={() => { setSelectedBook(book); navigate('books'); }}>View Details</IonButton>
+                              <IonButton size="small" fill="clear" color="danger" onClick={() => toggleSavedBook(book.id)}>Remove</IonButton>
+                            </div>
+                          </div>
+                        </article>
+                      );
+                    })}
+                  </div>
+                </section>
+              )}
+              {!isAdmin && page === 'user-preferences' && (
+                <section className="settings-page">
+                  <button type="button" className="settings-shortcut" onClick={navigateBack}><b>‹</b><span><strong>Back to Settings</strong><small>Return to Account &amp; Support</small></span></button>
+                  <div className="settings-section-title"><div><span>PERSONALIZE LIBTRACK</span><h3>App Preferences</h3></div><p>Choose the types of library updates you want to see in your account.</p></div>
+                  <article className="settings-card" style={{ width:'100%', display:'grid', gap:0 }}>
+                    {([
+                      ['borrowingUpdates', 'Borrowing Updates', 'Status changes for your borrowing requests and returns.'],
+                      ['dueDateReminders', 'Due-date Reminders', 'Reminders about books that are approaching their due dates.'],
+                      ['libraryAnnouncements', 'Library Announcements', 'Notices about library schedules, holidays, and service updates.'],
+                    ] as const).map(([key, title, description], index) => (
+                      <div key={key} style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:16, padding:'15px 0', borderBottom:index < 2 ? '1px solid #edf1f5' : '0' }}>
+                        <div style={{ flex:1 }}>
+                          <strong style={{ color:'#193550' }}>{title}</strong>
+                          <p style={{ margin:'5px 0 0', color:'#718198', fontSize:12, lineHeight:1.5 }}>{description}</p>
+                        </div>
+                        <input type="checkbox" checked={preferences[key]} onChange={(event) => updateAppPreference(key, event.target.checked)} aria-label={title} style={{ width:22, height:22, accentColor:'#173b59', flexShrink:0 }} />
+                      </div>
+                    ))}
+                    <p style={{ color:'#8795a7', fontSize:12, lineHeight:1.6, margin:'14px 0 0' }}>These preferences are saved on this device for your account. They do not yet change server-generated notifications or email delivery.</p>
+                  </article>
+                </section>
+              )}
+              {!isAdmin && page === 'user-about' && (
+                <section className="settings-page">
+                  <button type="button" className="settings-shortcut" onClick={navigateBack}><b>‹</b><span><strong>Back to Settings</strong><small>Return to Account & Support</small></span></button>
+                  <div className="settings-section-title"><div><span>SYSTEM INFORMATION</span><h3>About LibTrack</h3></div><p>Learn more about the library portal.</p></div>
+                  <article className="settings-card" style={{ width:'100%' }}>
+                    <div className="settings-card-top"><span className="settings-card-icon violet">ℹ️</span><span className="settings-card-label">NEUST PEÑARANDA OFF-CAMPUS</span></div>
+                    <h3>LibTrack · Library Portal</h3>
+                    <p>NEUST Peñaranda Off-Campus Library Management System.</p>
+                    <div className="settings-about-note">A centralized space for books, borrowing records, e-books, and academic research.</div>
+                  </article>
+                </section>
+              )}
+
+              {/* ADMIN SETTINGS: SEPARATE PAGES */}
+              {isAdmin && page === 'admin-problem-reports' && (
+                <section className="settings-page">
+                  <button type="button" className="settings-shortcut" onClick={navigateBack}><b>‹</b><span><strong>Back to Settings</strong><small>Return to Manage LibTrack</small></span></button>
+                  <div className="settings-section-title"><div><span>ADMINISTRATOR ONLY</span><h3>Problem Reports</h3></div><p>Review issues submitted by students and faculty, then update their status.</p></div>
+                  <div style={{ display:'flex', justifyContent:'flex-end' }}><IonButton fill="outline" onClick={() => void loadAdminProblemReports()} disabled={adminProblemReportsLoading}>{adminProblemReportsLoading ? 'Refreshing...' : 'Refresh Reports'}</IonButton></div>
+                  {adminProblemReportError && <p role="alert" style={{ color:'#b42318' }}>{adminProblemReportError}</p>}
+                  {adminProblemReportsLoading && <p>Loading reports...</p>}
+                  {!adminProblemReportsLoading && adminProblemReports.length === 0 && !adminProblemReportError && <article className="settings-card"><p style={{ margin:0, color:'#718198' }}>No problem reports have been submitted yet.</p></article>}
+                  <div style={{ display:'grid', gap:12 }}>
+                    {adminProblemReports.map((report) => (
+                      <article className="settings-card" key={report.id} style={{ display:'grid', gap:10 }}>
+                        <div style={{ display:'flex', justifyContent:'space-between', gap:10, flexWrap:'wrap' }}><strong>Report #{report.id} · {report.category}</strong><span style={{ fontWeight:750, color:report.status === 'resolved' ? '#087a43' : report.status === 'in_progress' ? '#a16207' : '#64748b' }}>{String(report.status || 'pending').replace('_',' ').toUpperCase()}</span></div>
+                        <p style={{ margin:0, color:'#52657b' }}><strong>Submitted by:</strong> {report.student_name || 'Unknown'} ({report.student_email || 'No email'})</p>
+                        <p style={{ margin:0, color:'#52657b', whiteSpace:'pre-wrap' }}>{report.description}</p>
+                        {report.created_at && <small style={{ color:'#8a98aa' }}>{new Date(report.created_at).toLocaleString()}</small>}
+                        {report.admin_note && <p style={{ margin:0, color:'#52657b' }}><strong>Admin note:</strong> {report.admin_note}</p>}
+                        <label className="settings-field">Update status
+                          <select value={report.status || 'pending'} onChange={(event) => void updateAdminProblemReport(Number(report.id), event.target.value, report.admin_note || '')} style={{ display:'block', width:'100%', marginTop:7, padding:12, border:'1px solid #dce4ed', borderRadius:10, background:'#fff', color:'#193550' }}>
+                            <option value="pending">Pending</option><option value="in_progress">In Progress</option><option value="resolved">Resolved</option>
+                          </select>
+                        </label>
+                      </article>
+                    ))}
+                  </div>
+                </section>
+              )}
+
+              {isAdmin && page === 'admin-connection' && (
+                <section className="settings-page">
+                  <button type="button" className="settings-shortcut" onClick={navigateBack}><b>‹</b><span><strong>Back to Settings</strong><small>Return to Manage LibTrack</small></span></button>
+                  <div className="settings-section-title"><div><span>SYSTEM MANAGEMENT</span><h3>System Connection</h3></div><p>Check whether the frontend can reach the LibTrack backend.</p></div>
+                  <article className="settings-panel settings-admin-panel"><div className="settings-weekend-box" style={{ marginBottom: '18px' }}>
+                        <div className="settings-weekend-heading">
+                          <div><h4>System Connection</h4><p>Check whether the LibTrack frontend can reach the FastAPI backend.</p></div>
+                          <span className="settings-notice-icon">🖥️</span>
+                        </div>
+                        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:12, flexWrap:'wrap' }}>
+                          <div style={{ display:'flex', alignItems:'center', gap:9, color:'#344b63', fontWeight:750 }}>
+                            <span aria-hidden="true" style={{ width:10, height:10, borderRadius:'50%', background:apiHealthStatus === 'online' ? '#16a34a' : apiHealthStatus === 'offline' ? '#dc2626' : apiHealthStatus === 'checking' ? '#d69e2e' : '#94a3b8' }} />
+                            {apiHealthStatus === 'online' ? 'API ONLINE' : apiHealthStatus === 'offline' ? 'API OFFLINE' : apiHealthStatus === 'checking' ? 'CHECKING...' : 'NOT CHECKED'}
+                          </div>
+                          <IonButton type="button" fill="outline" onClick={() => void checkAdminApiHealth()} disabled={apiHealthStatus === 'checking'}>
+                            {apiHealthStatus === 'checking' ? 'Checking...' : 'Check Connection'}
+                          </IonButton>
+                        </div>
+                        {apiHealthMessage && <p role="status" aria-live="polite" style={{ margin:'8px 0 0', fontSize:13, color:apiHealthStatus === 'online' ? '#087a43' : apiHealthStatus === 'offline' ? '#b42318' : '#607b99' }}>{apiHealthMessage}</p>}
+                      </div></article>
+                </section>
+              )}
+              {isAdmin && page === 'admin-borrowing-schedule' && (
+                <section className="settings-page">
+                  <button type="button" className="settings-shortcut" onClick={navigateBack}><b>‹</b><span><strong>Back to Settings</strong><small>Return to Manage LibTrack</small></span></button>
+                  <div className="settings-section-title"><div><span>SYSTEM MANAGEMENT</span><h3>Borrowing Schedule</h3></div><p>Control when students and faculty can submit borrowing requests.</p></div>
+                  <article className="settings-panel settings-admin-panel"><div className="settings-weekend-box" style={{ marginBottom: '18px' }}>
+                        <div className="settings-weekend-heading"><div><h4>Borrowing Schedule</h4><p>Choose when Students and Faculty may submit book borrowing requests. Philippine Time (UTC+8).</p></div><span className="settings-notice-icon">📚</span></div>
+                        <label className="settings-check">
+                          <input type="checkbox" checked={borrowingSchedule.enabled} onChange={(event) => setBorrowingSchedule((current) => ({ ...current, enabled: event.target.checked }))} />
+                          <span><strong>Enable book borrowing</strong><small>Turn this off to temporarily stop all new borrowing requests.</small></span>
+                        </label>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(145px, 1fr))', gap: 10, margin: '14px 0' }}>
+                          <label className="settings-field">Opens at<input type="time" value={borrowingSchedule.open_time} disabled={!borrowingSchedule.enabled} onChange={(event) => setBorrowingSchedule((current) => ({ ...current, open_time: event.target.value }))} /></label>
+                          <label className="settings-field">Closes at<input type="time" value={borrowingSchedule.close_time} disabled={!borrowingSchedule.enabled} onChange={(event) => setBorrowingSchedule((current) => ({ ...current, close_time: event.target.value }))} /></label>
+                        </div>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 8, margin: '12px 0' }}>
+                          {['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'].map((day) => (
+                            <label key={day} className="settings-check" style={{ margin: 0, padding: '8px 10px', border: '1px solid #e5eaf0', borderRadius: 8 }}>
+                              <input type="checkbox" checked={borrowingSchedule.days.includes(day)} disabled={!borrowingSchedule.enabled} onChange={(event) => setBorrowingSchedule((current) => ({ ...current, days: event.target.checked ? [...current.days, day] : current.days.filter((item) => item !== day) }))} />
+                              <span><strong>{day}</strong></span>
+                            </label>
+                          ))}
+                        </div>
+                        <label className="settings-field">Message when borrowing is closed<textarea rows={2} maxLength={500} value={borrowingSchedule.message} onChange={(event) => setBorrowingSchedule((current) => ({ ...current, message: event.target.value }))} /></label>
+                        <IonButton type="button" expand="block" onClick={() => void saveBorrowingSchedule()} disabled={borrowingScheduleSaving}>{borrowingScheduleSaving ? 'Saving...' : 'Save Borrowing Schedule'}</IonButton>
+                        {borrowingScheduleMessage && <p role="status" aria-live="polite" style={{ margin: '10px 0 0', color: borrowingScheduleMessage.includes('successfully') ? '#087a43' : borrowingScheduleMessage.startsWith('Saving') ? '#607b99' : '#b42318', fontSize: 13, fontWeight: 700 }}>{borrowingScheduleMessage}</p>}
+                      </div></article>
+                </section>
+              )}
+              {isAdmin && page === 'admin-library-schedule' && (
+                <section className="settings-page">
+                  <button type="button" className="settings-shortcut" onClick={navigateBack}><b>‹</b><span><strong>Back to Settings</strong><small>Return to Manage LibTrack</small></span></button>
+                  <div className="settings-section-title"><div><span>SYSTEM MANAGEMENT</span><h3>Library Schedule</h3></div><p>Manage the opening and closing hours shown to library users.</p></div>
+                  <article className="settings-panel settings-admin-panel"><div className="settings-weekend-box" style={{ marginBottom: '18px' }}>
+                        <div className="settings-weekend-heading"><div><h4>Library Schedule</h4><p>Set the opening and closing hours shown to students on their Home page. Philippine Time (UTC+8).</p></div><span className="settings-notice-icon">🕒</span></div>
+                        <div style={{ display: 'grid', gap: '10px', margin: '14px 0' }}>
+                          {(['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'] as const).map((day) => {
+                            const value = librarySchedule[day] || { closed: true, open: '08:00', close: '12:00' };
+                            return <div key={day} style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', alignItems: 'center', gap: '10px', padding: '10px 12px', border: '1px solid #e3eaf2', borderRadius: '10px', background: '#fff' }}>
+                              <strong style={{ color: '#20364f' }}>{day}</strong>
+                              <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', color: '#526b86' }}><input type="checkbox" checked={value.closed} onChange={(event) => setLibrarySchedule((current) => ({ ...current, [day]: { ...value, closed: event.target.checked } }))} /> Closed</label>
+                              <label className="settings-field" style={{ margin: 0, fontSize: '12px' }}>Opens<input aria-label={`${day} opening time`} type="time" value={value.open} disabled={value.closed} onChange={(event) => setLibrarySchedule((current) => ({ ...current, [day]: { ...value, open: event.target.value } }))} /></label>
+                              <label className="settings-field" style={{ margin: 0, fontSize: '12px' }}>Closes<input aria-label={`${day} closing time`} type="time" value={value.close} disabled={value.closed} onChange={(event) => setLibrarySchedule((current) => ({ ...current, [day]: { ...value, close: event.target.value } }))} /></label>
+                            </div>;
+                          })}
+                        </div>
+                        <IonButton type="button" expand="block" onClick={() => void saveLibrarySchedule()} disabled={libraryScheduleSaving}>
+                          {libraryScheduleSaving ? 'Saving...' : 'Save Library Schedule'}
+                        </IonButton>
+                        {libraryScheduleMessage && (
+                          <IonText color={libraryScheduleMessage.startsWith('Library schedule saved') ? 'success' : libraryScheduleMessage.startsWith('Saving') ? 'medium' : 'danger'}>
+                            <p role="status" aria-live="polite" style={{ margin: '10px 0 0', fontSize: '13px', fontWeight: 600 }}>
+                              {libraryScheduleMessage}
+                            </p>
+                          </IonText>
+                        )}
+                      </div></article>
+                </section>
+              )}
+              {isAdmin && page === 'admin-weekend-notice' && (
+                <section className="settings-page">
+                  <button type="button" className="settings-shortcut" onClick={navigateBack}><b>‹</b><span><strong>Back to Settings</strong><small>Return to Manage LibTrack</small></span></button>
+                  <div className="settings-section-title"><div><span>NOTIFICATION SETTINGS</span><h3>Weekend Borrowing Notice</h3></div><p>Set the time and message for the Saturday and Sunday student pop-up.</p></div>
+                  <article className="settings-panel settings-admin-panel"><div className="settings-weekend-box">
+                        <div className="settings-weekend-heading"><div><h4>Weekend Borrowing Notice</h4><p>Set the Philippine time when students will see the pop-up every Saturday and Sunday.</p></div><span className="settings-notice-icon">🔔</span></div>
+                        <label className="settings-check"><input type="checkbox" checked={weekendNoticeEnabled} onChange={(event) => setWeekendNoticeEnabled(event.target.checked)} /> <span><strong>Enable weekend notice</strong><small>Automatically show the notice to students on Saturdays and Sundays.</small></span></label>
+                        <div className="settings-weekend-fields">
+                          <label className="settings-field">Pop-up time <small>Philippine Standard Time (UTC+8)</small><input type="time" value={weekendNoticeTime} onChange={(event) => setWeekendNoticeTime(event.target.value)} /></label>
+                          <label className="settings-field">Message shown to students <small>Keep the message clear and informative.</small><textarea value={weekendNoticeMessage} onChange={(event) => setWeekendNoticeMessage(event.target.value)} rows={3} maxLength={1000} /></label>
+                        </div>
+                        <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(180px, 1fr))', gap:10 }}>
+                          <IonButton type="button" expand="block" fill="outline" onClick={() => setShowAdminNoticePreview(true)}>Preview Student Pop-up</IonButton>
+                          <IonButton type="button" expand="block" onClick={() => void saveWeekendNoticeSettings()} disabled={weekendNoticeSaving || !weekendNoticeMessage.trim()}>{weekendNoticeSaving ? 'Saving...' : 'Save Weekend Notice Settings'}</IonButton>
+                        </div>
+                        {weekendNoticeSaveMessage && (
+                          <p role="status" aria-live="polite" style={{
+                            margin: '10px 0 0',
+                            color: weekendNoticeSaveMessage.startsWith('Hindi na-save') ? '#b42318' : '#176b45',
+                            fontSize: '13px',
+                            fontWeight: 600,
+                          }}>
+                            {weekendNoticeSaveMessage}
+                          </p>
+                        )}
+                      </div>{showAdminNoticePreview && (
+                        <div role="presentation" onClick={() => setShowAdminNoticePreview(false)} style={{ position:'fixed', inset:0, zIndex:15000, display:'grid', placeItems:'center', padding:18, background:'rgba(7,24,43,.68)', backdropFilter:'blur(5px)' }}>
+                          <section role="dialog" aria-modal="true" aria-labelledby="admin-notice-preview-title" onClick={(event) => event.stopPropagation()} style={{ width:'min(100%, 440px)', background:'#fff', color:'#18324d', borderRadius:18, padding:22, boxShadow:'0 24px 70px rgba(10,30,52,.32)' }}>
+                            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:12 }}>
+                              <div><span style={{ color:'#b18425', fontSize:10, fontWeight:850, letterSpacing:'.12em' }}>LIBTRACK · NOTICE PREVIEW</span><h3 id="admin-notice-preview-title" style={{ margin:'5px 0 0', fontSize:20 }}>Weekend Borrowing Notice</h3></div>
+                              <button type="button" onClick={() => setShowAdminNoticePreview(false)} aria-label="Close preview" style={{ border:0, borderRadius:9, width:36, height:36, background:'#eef2f7', color:'#243b55', fontSize:21, cursor:'pointer' }}>×</button>
+                            </div>
+                            <div style={{ marginTop:18, padding:16, borderRadius:12, background:'#fff8e8', border:'1px solid #f1dba8' }}>
+                              <div style={{ fontSize:25, marginBottom:8 }}>🔔</div>
+                              <strong style={{ display:'block', fontSize:16, color:'#8a5a00' }}>Library Schedule Reminder</strong>
+                              <p style={{ margin:'9px 0 12px', lineHeight:1.55, color:'#52657a', whiteSpace:'pre-wrap' }}>{weekendNoticeMessage.trim() || 'No notice message has been entered yet.'}</p>
+                              <small style={{ color:'#8a6b35' }}>Scheduled time: {weekendNoticeTime} · Philippine Time (UTC+8)</small>
+                            </div>
+                            {!weekendNoticeEnabled && <p style={{ color:'#b42318', fontSize:12, marginBottom:0 }}>Notice is currently disabled. This is a preview only.</p>}
+                            <IonButton type="button" expand="block" onClick={() => setShowAdminNoticePreview(false)} style={{ marginTop:14 }}>Close Preview</IonButton>
+                          </section>
+                        </div>
+                      )}</article>
+                </section>
+              )}
+              {isAdmin && page === 'admin-password' && (
+                <section className="settings-page">
+                  <button type="button" className="settings-shortcut" onClick={navigateBack}><b>‹</b><span><strong>Back to Settings</strong><small>Return to Manage LibTrack</small></span></button>
+                  <div className="settings-section-title"><div><span>ACCOUNT SECURITY</span><h3>Change Password</h3></div><p>Update your administrator password securely.</p></div>
+                  <article className="settings-card" style={{ width:'100%' }}>
+                    <form onSubmit={(event) => void handleChangeAccountPassword(event)} style={{ display:'grid', gap:12 }}>
+                      <label className="settings-field">Current Password
+                        <div style={{ display:'flex', gap:8, alignItems:'center' }}>
+                          <input type={showCurrentAccountPassword ? 'text' : 'password'} autoComplete="current-password" placeholder="Enter current password" value={currentAccountPassword} onChange={(event) => { setCurrentAccountPassword(event.target.value); setChangePasswordMessage(''); }} required style={{ flex:1, minWidth:0 }} />
+                          <button type="button" onClick={() => setShowCurrentAccountPassword((value) => !value)}>{showCurrentAccountPassword ? 'Hide' : 'Show'}</button>
+                        </div>
+                      </label>
+                      <label className="settings-field">New Password <small>At least 10 characters.</small>
+                        <div style={{ display:'flex', gap:8, alignItems:'center' }}>
+                          <input type={showNewAccountPassword ? 'text' : 'password'} autoComplete="new-password" minLength={10} placeholder="Enter new password" value={newAccountPassword} onChange={(event) => { setNewAccountPassword(event.target.value); setChangePasswordMessage(''); }} required style={{ flex:1, minWidth:0 }} />
+                          <button type="button" onClick={() => setShowNewAccountPassword((value) => !value)}>{showNewAccountPassword ? 'Hide' : 'Show'}</button>
+                        </div>
+                      </label>
+                      <label className="settings-field">Confirm New Password
+                        <div style={{ display:'flex', gap:8, alignItems:'center' }}>
+                          <input type={showConfirmAccountPassword ? 'text' : 'password'} autoComplete="new-password" minLength={10} placeholder="Confirm new password" value={confirmAccountPassword} onChange={(event) => { setConfirmAccountPassword(event.target.value); setChangePasswordMessage(''); }} required style={{ flex:1, minWidth:0 }} />
+                          <button type="button" onClick={() => setShowConfirmAccountPassword((value) => !value)}>{showConfirmAccountPassword ? 'Hide' : 'Show'}</button>
+                        </div>
+                      </label>
+                      <IonButton type="submit" expand="block" disabled={changePasswordSaving}>{changePasswordSaving ? 'Saving Password...' : 'Save New Password'}</IonButton>
+                      {changePasswordMessage && <p role="status" aria-live="polite">{changePasswordMessage}</p>}
+                    </form>
+                  </article>
+                </section>
+              )}
+
               {/* USER PROFILE */}
               {page === 'profile' && (
                 <section className="quick-section" style={{ maxWidth: '980px', margin: '0 auto', padding: 0, overflow: 'hidden', border: '1px solid #dce6f2', borderRadius: '22px', background: '#ffffff', boxShadow: '0 8px 28px rgba(25, 55, 90, .08)' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '24px', padding: 'clamp(20px, 4vw, 34px) clamp(18px, 4vw, 38px)', borderBottom: '1px solid #e5edf6', flexWrap: 'wrap' }}>
-                    <div style={{ width: '124px', height: '124px', flex: '0 0 124px', borderRadius: '50%', display: 'grid', placeItems: 'center', background: '#eaf2ff', color: '#1765d1', border: '5px solid #f5f8fc', boxShadow: '0 0 0 1px #d8e4f2', fontSize: '42px', fontWeight: 700 }}>
-                      {(user?.full_name || user?.name || user?.email || 'U').trim().charAt(0).toUpperCase()}
+                    <div style={{ width: '124px', height: '124px', flex: '0 0 124px', borderRadius: '50%', display: 'grid', placeItems: 'center', overflow: 'hidden', background: '#eaf2ff', color: '#1765d1', border: '5px solid #f5f8fc', boxShadow: '0 0 0 1px #d8e4f2', fontSize: '42px', fontWeight: 700 }}>
+                      {user?.profile_photo_url ? <img src={user.profile_photo_url} alt="Profile" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : (user?.full_name || user?.name || user?.email || 'U').trim().charAt(0).toUpperCase()}
                     </div>
                     <div style={{ minWidth: 0 }}>
                       <h2 style={{ margin: '0 0 8px', color: '#09284a', fontSize: '32px', fontWeight: 800 }}>{user?.full_name || user?.name || 'Library User'}</h2>
                       <p style={{ margin: '0 0 14px', color: '#58718d', fontSize: '18px', overflowWrap: 'anywhere' }}>{user?.email || 'No email provided'}</p>
-                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: '9px', borderRadius: '30px', padding: '9px 16px', background: '#eafbf2', color: '#087a43', fontWeight: 800, fontSize: '14px', letterSpacing: '.04em' }}><span>●</span>{isAdmin ? 'ADMIN' : 'STUDENT'}</span>
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: '9px', borderRadius: '30px', padding: '9px 16px', background: isAdmin ? '#fff4d6' : isFaculty ? '#eaf2ff' : '#eafbf2', color: isAdmin ? '#8a5a00' : isFaculty ? '#2457a6' : '#087a43', fontWeight: 800, fontSize: '14px', letterSpacing: '.04em' }}><span>●</span>{accountRoleLabel}</span>
+                      <div style={{ marginTop: 12 }}><label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '10px 15px', borderRadius: 10, background: '#173b60', color: '#fff', fontWeight: 700, cursor: profilePhotoSaving ? 'wait' : 'pointer', opacity: profilePhotoSaving ? .6 : 1 }}>
+                        {profilePhotoSaving ? 'Uploading photo…' : 'Change Profile Photo'}
+                        <input type="file" accept="image/jpeg,image/png,image/webp" disabled={profilePhotoSaving} style={{ display: 'none' }} onChange={async (event) => { const file = event.target.files?.[0]; event.target.value = ''; if (!file) return; if (!['image/jpeg','image/png','image/webp'].includes(file.type) || file.size > 5 * 1024 * 1024) { setError('Choose a JPG, PNG, or WEBP image up to 5 MB.'); return; } setProfilePhotoSaving(true); setError(''); try { const body = new FormData(); body.append('file', file); const response = await fetch(`${API}/auth/profile-photo`, { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body }); const data = await readResponse(response); setUser(current => current ? { ...current, profile_photo_url: data.profile_photo_url } : current); setNotice('Profile photo updated successfully.'); } catch (err) { setError(getError(err)); } finally { setProfilePhotoSaving(false); } }} />
+                      </label></div>
                     </div>
                   </div>
                   <div style={{ padding: 'clamp(20px, 4vw, 30px) clamp(18px, 4vw, 38px) 20px' }}>
                     <h3 style={{ margin: '0 0 18px', color: '#09284a', fontSize: '20px', fontWeight: 800 }}>PERSONAL INFORMATION</h3>
                     {[
-                      { icon: '🎓', label: 'Student ID', value: user?.student_id || 'Not provided' },
+                      ...(isStudentAccount ? [
+                        { icon: '🎓', label: 'Student ID', value: user?.student_id || 'Not provided' },
+                      ] : []),
                       { icon: '👤', label: 'Username', value: user?.username || (user?.email ? user.email.split('@')[0] : 'Not provided') },
                       { icon: '✉️', label: 'Email', value: user?.email || 'Not provided' },
-                      { icon: '📘', label: 'Course', value: user?.course || (isAdmin ? 'Not applicable' : 'Not provided') },
-                      { icon: '🎓', label: 'Year', value: user?.year || (isAdmin ? 'Not applicable' : 'Not provided') },
-                      { icon: '🏷️', label: 'Section', value: user?.section || (isAdmin ? 'Not applicable' : 'Not provided') },
-                      { icon: '🔒', label: 'Account Type', value: isAdmin ? 'admin' : 'student' },
+                      ...(isStudentAccount ? [
+                        { icon: '📘', label: 'Course', value: user?.course || 'Not provided' },
+                        { icon: '🎓', label: 'Year', value: user?.year || 'Not provided' },
+                        { icon: '🏷️', label: 'Section', value: user?.section || 'Not provided' },
+                      ] : []),
+                      { icon: '🔒', label: 'Account Type', value: normalizedUserRole || 'student' },
                     ].map((item) => (
                       <div key={item.label} style={{ display: 'grid', gridTemplateColumns: '48px minmax(70px, .8fr) minmax(0, 1fr)', alignItems: 'center', gap: '16px', minHeight: '86px', borderBottom: '1px solid #e5edf6', padding: '10px 0' }}>
                         <span style={{ width: '48px', height: '48px', display: 'grid', placeItems: 'center', borderRadius: '15px', background: '#f2f6fb', fontSize: '21px' }}>{item.icon}</span>
@@ -3835,6 +6569,29 @@ function App() {
                     </div>
 
                   </section>
+
+                  {!isAdmin && (
+                  <section className="quick-section" aria-labelledby="library-schedule-heading" style={{ marginTop: '20px', padding: 'clamp(16px, 3vw, 24px)', border: '1px solid #e1e8f0', borderRadius: '18px', background: '#ffffff', boxShadow: '0 5px 18px rgba(23, 40, 63, .045)' }}>
+                    <div className="section-heading" style={{ marginBottom: '14px' }}>
+                      <div><span className="eyebrow">PLAN YOUR VISIT</span><h2 id="library-schedule-heading">Library Schedule</h2><p>Library opening and closing hours.</p></div>
+                      <span aria-hidden="true" style={{ fontSize: '28px' }}>🕒</span>
+                    </div>
+                    <div style={{ display: 'grid', gap: '8px' }}>
+                      {(() => {
+                        const today = new Intl.DateTimeFormat('en-US', { weekday: 'long', timeZone: 'Asia/Manila' }).format(new Date());
+                        const hours = librarySchedule[today] || { closed: true, open: '08:00', close: '12:00' };
+                        const formatTime = (time: string) => { const [hourText, minute] = time.split(':'); const hour = Number(hourText); return `${hour % 12 || 12}:${minute}${hour >= 12 ? 'PM' : 'AM'}`; };
+                        return <div key={today} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', padding: '14px 16px', border: '1px solid #d8e3ef', borderRadius: '11px', background: '#f4f8fc' }}>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                            <strong style={{ color: '#20364f', fontSize: '16px' }}>{today}</strong>
+                            <span style={{ color: '#9a7626', fontSize: '11px', fontWeight: 800, letterSpacing: '1px' }}>TODAY</span>
+                          </div>
+                          <span style={{ color: hours.closed ? '#c0392b' : '#238653', fontWeight: 700, fontSize: '14px', textAlign: 'right' }}>{hours.closed ? 'Closed' : `${formatTime(hours.open)} - ${formatTime(hours.close)}`}</span>
+                        </div>;
+                      })()}
+                    </div>
+                  </section>
+                  )}
 
                   {isAdmin && (
                     <section className="stats-grid">
@@ -3960,81 +6717,237 @@ function App() {
                   )}
 
 
-                  <section className="quick-section">
-
-                    <div className="quick-grid">
-
-                      {isAdmin && (
-                        <button
-                          type="button"
-                          className="quick-card"
-                          onClick={() => navigate('categories')}
-                        >
-                          <span className="quick-icon">▦</span>
-                          <strong>Book Categories</strong>
-                          <small>Browse by subject and genre</small>
-                        </button>
-                      )}
-
-                      {isAdmin && (
-                        <button
-                          type="button"
-                          className="quick-card"
-                          onClick={() => navigate('books')}
-                        >
-                          <span className="quick-icon">▤</span>
-                          <strong>Book Catalog</strong>
-                          <small>Search and manage books</small>
-                        </button>
-                      )}
-
-                      {isAdmin && (
-
-                        <>
-
-                          <button
-
-                            type="button"
-
-                            className="quick-card"
-
-                            onClick={() => navigate('accounts')}
-
-                          >
-
-                            <span className="quick-icon">♙</span>
-
-                            <strong>All Accounts</strong>
-
-                            <small>View all registered users</small>
-
-                          </button>
-
-                          <button
-
-                            type="button"
-
-                            className="quick-card"
-
-                            onClick={() => navigate('sessions')}
-
-                          >
-
-                            <span className="quick-icon">◉</span>
-
-                            <strong>Logged-in Accounts</strong>
-
-                            <small>Monitor active sessions</small>
-
-                          </button>
-
-                        </>
-
-                      )}
-
+                  <section
+                    className="quick-section"
+                    aria-labelledby="most-borrowed-heading"
+                    style={{
+                      marginTop: '20px',
+                      padding: 'clamp(16px, 3vw, 24px)',
+                      border: '1px solid #e1e8f0',
+                      borderRadius: '18px',
+                      background: '#ffffff',
+                      boxShadow: '0 5px 18px rgba(23, 40, 63, .045)',
+                    }}
+                  >
+                    <div className="section-heading" style={{ marginBottom: '16px' }}>
+                      <div>
+                        <span className="eyebrow">LIBRARY FAVORITES</span>
+                        <h2 id="most-borrowed-heading">Most Borrowed Books</h2>
+                        <p>Books ranked by the number of approved borrowing transactions.</p>
+                      </div>
+                      <IonBadge color="primary">Top 6</IonBadge>
                     </div>
 
+                    {mostBorrowedBooks.length === 0 ? (
+                      <p className="empty-state" style={{ margin: 0 }}>
+                        No approved borrowing records yet. Popular books will appear here as students borrow them.
+                      </p>
+                    ) : (
+                      <div
+                        aria-label="Most borrowed books carousel"
+                        style={{
+                          display: 'flex',
+                          flexDirection: 'row',
+                          flexWrap: 'nowrap',
+                          gap: '14px',
+                          overflowX: 'auto',
+                          overflowY: 'hidden',
+                          alignItems: 'stretch',
+                          padding: '2px 2px 12px',
+                          scrollBehavior: 'smooth',
+                          scrollSnapType: 'x mandatory',
+                          WebkitOverflowScrolling: 'touch',
+                          overscrollBehaviorX: 'contain',
+                        }}
+                      >
+                        {mostBorrowedBooks.slice(0, 6).map((book, index) => (
+                          <article
+                            key={book.id}
+                            style={{
+                              minWidth: '155px',
+                              width: '155px',
+                              maxWidth: '155px',
+                              flex: '0 0 155px',
+                              height: '315px',
+                              minHeight: '315px',
+                              maxHeight: '315px',
+                              boxSizing: 'border-box',
+                              scrollSnapAlign: 'start',
+                              display: 'flex',
+                              flexDirection: 'column',
+                              padding: '12px',
+                              overflow: 'hidden',
+                              border: '1px solid #e5ebf2',
+                              borderRadius: '14px',
+                              background: '#fbfcfe',
+                            }}
+                          >
+                            <div style={{ position: 'relative', width: '100%', maxWidth: '150px', aspectRatio: '3 / 4', margin: '0 auto 11px' }}>
+                              <BookCover
+                                book={book}
+                                index={index}
+                                className="book-cover most-borrowed-cover"
+                              />
+                              <span
+                                style={{
+                                  position: 'absolute',
+                                  top: '9px',
+                                  left: '9px',
+                                  zIndex: 5,
+                                  width: '30px',
+                                  minWidth: '30px',
+                                  height: '30px',
+                                  boxSizing: 'border-box',
+                                  display: 'grid',
+                                  placeItems: 'center',
+                                  padding: 0,
+                                  borderRadius: '50%',
+                                  border: '2px solid rgba(255,255,255,.95)',
+                                  background: '#173b60',
+                                  color: '#fff',
+                                  fontSize: '13px',
+                                  lineHeight: 1,
+                                  fontWeight: 800,
+                                  boxShadow: '0 2px 7px rgba(0,0,0,.22)',
+                                }}
+                              >
+                                {index + 1}
+                              </span>
+                            </div>
+                            <strong style={{ color: '#17324f', fontSize: '13px', lineHeight: 1.4, overflowWrap: 'anywhere', display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: 2, overflow: 'hidden', minHeight: '36px' }}>
+                              {book.title}
+                            </strong>
+                            <span style={{ marginTop: '4px', color: '#667b91', fontSize: '11px', lineHeight: 1.4, display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: 2, overflow: 'hidden', minHeight: '31px' }}>
+                              {book.author}
+                            </span>
+                            <span style={{ marginTop: 'auto', paddingTop: '10px', color: '#315a61', fontSize: '12px', fontWeight: 800 }}>
+                              {book.borrow_count} {book.borrow_count === 1 ? 'borrow' : 'borrows'}
+                            </span>
+                          </article>
+                        ))}
+                      </div>
+                    )}
                   </section>
+
+                                    {isAdmin && (
+                    <section
+                      className="quick-section"
+                      aria-labelledby="most-borrowing-students-heading"
+                      style={{
+                        marginTop: '20px',
+                        padding: 'clamp(16px, 3vw, 24px)',
+                        border: '1px solid #e1e8f0',
+                        borderRadius: '18px',
+                        background: '#ffffff',
+                        boxShadow: '0 5px 18px rgba(23, 40, 63, .045)',
+                      }}
+                    >
+                      <div className="section-heading" style={{ marginBottom: '16px' }}>
+                        <div>
+                          <span className="eyebrow">STUDENT ACTIVITY</span>
+                          <h2 id="most-borrowing-students-heading">Students Who Borrow the Most</h2>
+                          <p>Ranked by approved borrowing transactions. Pending requests are not included.</p>
+                        </div>
+                        <IonBadge color="primary">Top 5</IonBadge>
+                      </div>
+
+                      {mostBorrowingStudents.length === 0 ? (
+                        <p className="empty-state" style={{ margin: 0 }}>
+                          No approved student borrowing records yet.
+                        </p>
+                      ) : (
+                        <div style={{ display: 'grid', gap: '10px' }}>
+                          {mostBorrowingStudents.slice(0, 5).map((student, index) => (
+                            <article
+                              key={student.id}
+                              style={{
+                                display: 'grid',
+                                gridTemplateColumns: '34px minmax(0, 1fr) auto',
+                                alignItems: 'center',
+                                gap: '12px',
+                                padding: '13px 14px',
+                                border: '1px solid #e5ebf2',
+                                borderRadius: '13px',
+                                background: index === 0 ? '#f7faff' : '#fff',
+                              }}
+                            >
+                              <span style={{
+                                width: '30px', height: '30px', display: 'grid', placeItems: 'center',
+                                borderRadius: '50%', background: index === 0 ? '#173b60' : '#edf2f7',
+                                color: index === 0 ? '#fff' : '#49627c', fontSize: '12px', fontWeight: 800,
+                              }}>
+                                {index + 1}
+                              </span>
+                              <div style={{ minWidth: 0 }}>
+                                <strong style={{ display: 'block', color: '#17324f', fontSize: '14px', lineHeight: 1.4, overflowWrap: 'anywhere' }}>
+                                  {student.full_name}
+                                </strong>
+                                <span style={{ display: 'block', marginTop: '3px', color: '#667b91', fontSize: '11px', lineHeight: 1.45 }}>
+                                  {[student.student_id, student.course, student.year, student.section].filter(Boolean).join(' • ') || 'Student details not available'}
+                                </span>
+                              </div>
+                              <div style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                                <strong style={{ display: 'block', color: '#315a61', fontSize: '17px' }}>{student.borrow_count}</strong>
+                                <span style={{ color: '#667b91', fontSize: '10px' }}>
+                                  {student.borrow_count === 1 ? 'borrow' : 'borrows'}
+                                </span>
+                              </div>
+                            </article>
+                          ))}
+                        </div>
+                      )}
+                    </section>
+                  )}
+
+{isAdmin && (
+  <>
+    <section className="quick-section" style={{ marginTop: '20px', padding: 'clamp(16px, 3vw, 24px)', border: '1px solid #e1e8f0', borderRadius: '18px', background: '#fff', boxShadow: '0 5px 18px rgba(23, 40, 63, .045)' }}>
+      <div className="section-heading" style={{ marginBottom: '14px' }}>
+        <div><span className="eyebrow">LIBRARY TIMELINE</span><h2>Recent Library Activities</h2><p>Latest borrowing requests, checkouts, and returns.</p></div>
+        <IonButton size="small" fill="outline" onClick={() => navigate('borrowings')}>View all</IonButton>
+      </div>
+      {adminRecentActivities.length === 0 ? <p className="empty-state" style={{ margin: 0 }}>No recent library activities yet.</p> : (
+        <div style={{ display: 'grid', gap: '9px' }}>
+          {adminRecentActivities.map((record) => {
+            const borrower = accounts.find((account) => account.id === record.user_id);
+            const borrowedBook = books.find((book) => book.id === record.book_id);
+            const statusLabel = record.status === 'returned' ? 'Returned' : record.status === 'pending' ? 'Requested' : 'Borrowed';
+            const statusColor = record.status === 'returned' ? 'success' : record.status === 'pending' ? 'warning' : 'primary';
+            return <article key={record.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', padding: '11px 13px', border: '1px solid #e5ebf2', borderRadius: '12px' }}>
+              <div style={{ minWidth: 0 }}><strong style={{ display: 'block', color: '#17324f', fontSize: '13px' }}>{borrower?.full_name || `User #${record.user_id}`}</strong><span style={{ color: '#667b91', fontSize: '11px' }}>{borrowedBook?.title || `Book #${record.book_id}`}</span></div>
+              <IonBadge color={statusColor}>{statusLabel}</IonBadge>
+            </article>;
+          })}
+        </div>
+      )}
+    </section>
+
+    <section className="quick-section" style={{ marginTop: '20px', padding: 'clamp(16px, 3vw, 24px)', border: '1px solid #e1e8f0', borderRadius: '18px', background: '#fff', boxShadow: '0 5px 18px rgba(23, 40, 63, .045)' }}>
+      <div className="section-heading" style={{ marginBottom: '16px' }}>
+        <div><span className="eyebrow">BORROWING ANALYTICS</span><h2>Monthly Borrowing Trends</h2><p>Approved borrowing transactions over the last six months.</p></div>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, minmax(0, 1fr))', alignItems: 'end', gap: 'clamp(7px, 2vw, 18px)', minHeight: '170px', padding: '12px 4px 0' }}>
+        {adminMonthlyBorrowing.map((month) => <div key={month.key} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'end', gap: '7px', minWidth: 0, height: '160px' }}>
+          <strong style={{ color: '#315a61', fontSize: '11px' }}>{month.count}</strong>
+          <div title={`${month.label}: ${month.count} approved borrowings`} style={{ width: 'min(100%, 42px)', height: `${Math.max(5, (month.count / adminMaxMonthlyBorrowing) * 112)}px`, minHeight: '5px', borderRadius: '8px 8px 3px 3px', background: 'linear-gradient(180deg, #d8b85d, #315a61)' }} />
+          <span style={{ color: '#667b91', fontSize: '10px', fontWeight: 700 }}>{month.label}</span>
+        </div>)}
+      </div>
+    </section>
+
+    <section className="quick-section" style={{ marginTop: '20px', padding: 'clamp(16px, 3vw, 24px)', border: '1px solid #e1e8f0', borderRadius: '18px', background: '#fff', boxShadow: '0 5px 18px rgba(23, 40, 63, .045)' }}>
+      <div className="section-heading" style={{ marginBottom: '14px' }}>
+        <div><span className="eyebrow">COURSE ENGAGEMENT</span><h2>Most Active Courses</h2><p>Approved borrowing transactions grouped by student course.</p></div>
+      </div>
+      <div style={{ display: 'grid', gap: '13px' }}>
+        {adminMostActiveCourses.map((item) => <div key={item.course}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', marginBottom: '6px' }}><strong style={{ color: '#17324f', fontSize: '13px' }}>{item.course}</strong><strong style={{ color: '#315a61', fontSize: '12px' }}>{item.count} borrows</strong></div>
+          <div style={{ height: '9px', overflow: 'hidden', borderRadius: '99px', background: '#edf2f7' }}><div style={{ width: `${item.count ? (item.count / Math.max(1, adminMostActiveCourses[0]?.count)) * 100 : 0}%`, height: '100%', borderRadius: '99px', background: 'linear-gradient(90deg, #315a61, #d8b85d)' }} /></div>
+        </div>)}
+      </div>
+    </section>
+  </>
+)}
 
                 </>
 
@@ -4050,18 +6963,24 @@ function App() {
                       <p>Browse PDF books by course, year level, semester, and subject.</p>
                     </div>
                     {isAdmin && (
-                      <IonButton onClick={() => { setShowEbookUploadForm((show) => !show); setEbooksError(''); }} disabled={ebookUploading}>
-                        {showEbookUploadForm ? 'Cancel' : '+ ADD E-BOOK'}
-                      </IonButton>
+                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                        <IonButton fill="outline" onClick={() => void addCourse()}>+ ADD COURSE</IonButton>
+                        <IonButton fill="outline" color="danger" onClick={() => void deleteCourse()} disabled={!additionalCourses.length}>DELETE COURSE</IonButton>
+                        <IonButton onClick={() => { setShowEbookUploadForm((show) => !show); setEbooksError(''); }} disabled={ebookUploading}>
+                          {showEbookUploadForm ? 'Cancel' : '+ ADD E-BOOK'}
+                        </IonButton>
+                      </div>
                     )}
                   </div>
 
+                  <input ref={ebookCoverInputRef} type="file" accept="image/png,image/jpeg,image/webp" hidden onChange={(event) => void uploadEbookCover(event)} />
+                  <input ref={ebookCollectionCoverInputRef} type="file" accept="image/png,image/jpeg,image/webp" hidden aria-label="Choose E-Book Collection photo" onChange={(event) => void uploadEbookCollectionCover(event)} />
                   {isAdmin && showEbookUploadForm && (
                     <div style={{ margin: '14px 0 18px', padding: 14, background: '#fff', border: '1px solid #dce3eb', borderRadius: 12 }}>
                       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(135px, 1fr))', gap: 8, maxWidth: 520 }}>
                         <label style={{ fontSize: 12, fontWeight: 700, color: '#526174' }}>Course
                           <IonSelect value={ebookUploadCourse} onIonChange={(event) => { const value = String(event.detail.value || 'BSIT'); setEbookUploadCourse(value); setEbookUploadYear(value === 'BSIT' ? '1ST YEAR CICT' : `1ST YEAR ${value}`); setEbookUploadSemester(value === 'BSIT' ? '1st sem 1st yr cict' : '1st Semester'); setEbookUploadSubject(''); }} interface="popover" fill="outline" disabled={ebookUploading}>
-                            <IonSelectOption value="BSIT">BSIT</IonSelectOption><IonSelectOption value="BSED">BSED</IonSelectOption><IonSelectOption value="BSBA">BSBA</IonSelectOption>
+                            {availableCourseOptions.map((courseOption) => <IonSelectOption key={courseOption.value} value={courseOption.value}>{courseOption.label}</IonSelectOption>)}
                           </IonSelect>
                         </label>
                         <label style={{ fontSize: 12, fontWeight: 700, color: '#526174' }}>Year level
@@ -4076,9 +6995,13 @@ function App() {
                           </IonSelect>
                         </label>
                         <label style={{ fontSize: 12, fontWeight: 700, color: '#526174' }}>Subject / Course code
-                          <IonSelect value={ebookUploadSubject} placeholder="Select subject" onIonChange={(event) => setEbookUploadSubject(String(event.detail.value || ''))} interface="popover" fill="outline" disabled={ebookUploading}>
-                            {getEbookSubjects(ebookUploadCourse, ebookUploadYear, String(ebookUploadSemester).toLowerCase().startsWith('1st') ? '1st Semester' : '2nd Semester').map((subject) => <IonSelectOption key={subject} value={subject}>{subject}</IonSelectOption>)}
-                          </IonSelect>
+                          {getEbookSubjects(ebookUploadCourse, ebookUploadYear, String(ebookUploadSemester).toLowerCase().startsWith('1st') ? '1st Semester' : '2nd Semester').length > 0 ? (
+                            <IonSelect value={ebookUploadSubject} placeholder="Select subject" onIonChange={(event) => setEbookUploadSubject(String(event.detail.value || ''))} interface="popover" fill="outline" disabled={ebookUploading}>
+                              {getEbookSubjects(ebookUploadCourse, ebookUploadYear, String(ebookUploadSemester).toLowerCase().startsWith('1st') ? '1st Semester' : '2nd Semester').map((subject) => <IonSelectOption key={subject} value={subject}>{subject}</IonSelectOption>)}
+                            </IonSelect>
+                          ) : (
+                            <IonInput value={ebookUploadSubject} placeholder="Enter subject or course code" onIonInput={(event) => setEbookUploadSubject(String(event.detail.value || ''))} fill="outline" disabled={ebookUploading} />
+                          )}
                         </label>
                       </div>
                       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
@@ -4108,19 +7031,29 @@ function App() {
 
                       {!selectedEbookCourse && (
                         <div className="research-course-cards" aria-label="Choose an e-book course collection">
-                          {RESEARCH_COURSE_OPTIONS.map((courseOption, index) => {
+                          {availableCourseOptions.map((courseOption, index) => {
                             const count = ebooks.filter((item) => (item.course || item.category || '').toUpperCase() === courseOption.value).length;
-                            return <button type="button" className={`research-course-card research-course-card-${index + 1}`} key={courseOption.value} onClick={() => { setSelectedEbookCourse(courseOption.value); setSelectedEbookYear(null); setSelectedEbookSemester(null); setSelectedEbookSubject(null); setEbookQuery(''); }}>
-                              <div className="research-course-cover" style={{ position: 'relative', overflow: 'hidden', width: '100%', height: 'auto', aspectRatio: '1 / 1', padding: 0, margin: 0, boxSizing: 'border-box', borderRadius: 18, background: 'transparent' }}>
-                                <img
-                                  src={`/images/ebook-${courseOption.value.toLowerCase()}.jpeg`}
-                                  alt={`${courseOption.shortName} e-books collection cover`}
-                                  loading="lazy"
-                                  style={{ position: 'absolute', inset: 0, display: 'block', width: '100%', height: '100%', maxWidth: 'none', objectFit: 'cover', objectPosition: 'center', padding: 0, margin: 0, borderRadius: 'inherit' }}
-                                />
-                              </div>
-                              <div className="research-course-card-info"><span className="research-course-category">E-BOOK COLLECTION</span><strong>{courseOption.label}</strong><div className="research-course-card-footer"><span className="research-count-pill">{count} {count === 1 ? 'e-book' : 'e-books'}</span><span>Open collection →</span></div></div>
-                            </button>;
+                            const courseCode = courseOption.value.toUpperCase();
+                            const isBuiltInEbookCourse = ['BSIT', 'BSBA', 'BSED'].includes(courseCode);
+                            const defaultCover = isBuiltInEbookCourse ? `/images/ebook-${courseCode.toLowerCase()}.jpeg` : null;
+                            const coverSrc = ebookCollectionCovers[courseCode] || defaultCover;
+                            return <div className="research-course-card-shell" key={courseOption.value} style={{ position: 'relative', minWidth: 0 }}>
+                              <button type="button" className={`research-course-card research-course-card-${index + 1}`} style={{ width: '100%' }} onClick={() => { setSelectedEbookCourse(courseOption.value); setSelectedEbookYear(null); setSelectedEbookSemester(null); setSelectedEbookSubject(null); setEbookQuery(''); }}>
+                                <div className="research-course-cover" style={{ position: 'relative', overflow: 'hidden', width: '100%', height: 'auto', aspectRatio: '1 / 1', padding: 0, margin: 0, boxSizing: 'border-box', borderRadius: 18, background: coverSrc ? 'transparent' : 'linear-gradient(145deg, #102b4e 0%, #1d5b86 58%, #d5a642 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                  {coverSrc ? (
+                                    <img src={coverSrc} alt={`${courseOption.shortName} e-books collection cover`} loading="lazy" style={{ position: 'absolute', inset: 0, display: 'block', width: '100%', height: '100%', maxWidth: 'none', objectFit: 'cover', objectPosition: 'center', padding: 0, margin: 0, borderRadius: 'inherit' }} />
+                                  ) : (
+                                    <div aria-label={`${courseCode} default course cover`} style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 10, color: '#fff', textAlign: 'center', padding: 16 }}>
+                                      <span style={{ fontSize: 'clamp(28px, 7vw, 54px)', lineHeight: 1, fontWeight: 900, letterSpacing: 1.5 }}>{courseCode}</span>
+                                      <span style={{ width: 52, height: 3, borderRadius: 99, background: '#e4b84f' }} />
+                                      <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: 3 }}>LIBTRACK E-BOOKS</span>
+                                    </div>
+                                  )}
+                                </div>
+                                <div className="research-course-card-info"><span className="research-course-category">E-BOOK COLLECTION</span><strong>{courseOption.label}</strong><div className="research-course-card-footer"><span className="research-count-pill">{count} {count === 1 ? 'e-book' : 'e-books'}</span><span>Open collection →</span></div></div>
+                              </button>
+                              {isAdmin && <IonButton size="small" fill="solid" color="light" disabled={ebookCollectionCoverUploading === courseCode} onClick={() => chooseEbookCollectionCover(courseCode)} style={{ position: 'absolute', top: 12, right: 12, zIndex: 3, '--border-radius': '10px', fontWeight: 700 }}>{ebookCollectionCoverUploading === courseCode ? 'Uploading…' : 'Edit Photo'}</IonButton>}
+                            </div>;
                           })}
                         </div>
                       )}
@@ -4166,7 +7099,7 @@ function App() {
                           {!selectedEbookYear && <div style={{ display: 'grid', gap: 10 }}>{yearFolders.map((folder) => folderButton(folder, courseBooks.filter((item) => (item.year || 'Unsorted') === folder).length, () => setSelectedEbookYear(folder)))}</div>}
                           {selectedEbookYear && !selectedEbookSemester && <div style={{ display: 'grid', gap: 10 }}>{semesterFolders.map((folder) => folderButton(folder.label, semesterBooks.filter((item) => (item.semester || 'Unsorted') === folder.value).length, () => setSelectedEbookSemester(folder.value)))}</div>}
                           {selectedEbookSemester && !selectedEbookSubject && <div style={{ display: 'grid', gap: 10 }}>{subjectFolders.map((folder) => folderButton(folder, subjectBooks.filter((item) => (item.subject || 'General') === folder).length, () => setSelectedEbookSubject(folder)))}</div>}
-                          {selectedEbookSubject && <><IonSearchbar value={ebookQuery} onIonInput={(event) => setEbookQuery(event.detail.value || '')} placeholder="Search PDF title…" debounce={0} />{visiblePdfBooks.length ? <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 240px), 1fr))', alignItems: 'stretch', gap: 16, marginTop: 12 }}>{visiblePdfBooks.map((item) => <article key={item.id} style={{ height: 390, minHeight: 390, minWidth: 0, display: 'flex', flexDirection: 'column', background: '#fff', border: '1px solid #dce3eb', borderRadius: 16, overflow: 'hidden', boxShadow: '0 3px 12px rgba(24,45,70,.06)' }}><div style={{ height: 204, minHeight: 204, flex: '0 0 204px', background: 'linear-gradient(145deg,#eaf0f5,#d7e1eb)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><span style={{ fontSize: 50 }}>📕</span></div><div style={{ padding: 16, flex: '1 1 auto', minHeight: 0, display: 'flex', flexDirection: 'column' }}><h3 style={{ margin: '0 0 12px', minHeight: 81, maxHeight: 81, fontSize: 17, lineHeight: 1.35, fontWeight: 600, overflowWrap: 'anywhere', display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: 4, overflow: 'hidden' }}>{item.title}</h3>{!isAdmin && <IonButton expand="block" style={{ marginTop: 'auto' }} onClick={() => setSelectedEbook(item)}>Read E-Book</IonButton>}{isAdmin && <IonButton expand="block" fill="outline" color="danger" style={{ marginTop: 12 }} onClick={() => void deleteEbook(item)}>Delete E-Book</IonButton>}</div></article>)}</div> : <div className="research-empty-state"><strong>No PDFs in this subject folder.</strong></div>}</>}
+                          {selectedEbookSubject && <><IonSearchbar value={ebookQuery} onIonInput={(event) => setEbookQuery(event.detail.value || '')} placeholder="Search PDF title…" debounce={0} />{visiblePdfBooks.length ? <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 240px), 1fr))', alignItems: 'stretch', gap: 16, marginTop: 12 }}>{visiblePdfBooks.map((item) => <article key={item.id} style={{ height: 390, minHeight: 390, minWidth: 0, display: 'flex', flexDirection: 'column', background: '#fff', border: '1px solid #dce3eb', borderRadius: 16, overflow: 'hidden', boxShadow: '0 3px 12px rgba(24,45,70,.06)' }}><div style={{ height: 204, minHeight: 204, flex: '0 0 204px', background: 'linear-gradient(145deg,#eaf0f5,#d7e1eb)', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>{item.thumbnail_url ? <img src={item.thumbnail_url.startsWith('http') ? item.thumbnail_url : `${API}${item.thumbnail_url}`} alt={`Cover for ${item.title}`} style={{ width: '100%', height: '100%', objectFit: 'contain' }} /> : <span style={{ fontSize: 50 }}>📕</span>}</div><div style={{ padding: 16, flex: '1 1 auto', minHeight: 0, display: 'flex', flexDirection: 'column' }}><h3 style={{ margin: '0 0 12px', minHeight: 81, maxHeight: 81, fontSize: 17, lineHeight: 1.35, fontWeight: 600, overflowWrap: 'anywhere', display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: 4, overflow: 'hidden' }}>{item.title}</h3>{!isAdmin && <IonButton expand="block" style={{ marginTop: 'auto' }} onClick={() => setSelectedEbook(item)}>Read E-Book</IonButton>}{isAdmin && <><IonButton expand="block" fill="outline" style={{ marginTop: 'auto' }} disabled={ebookCoverUploadingId === item.id} onClick={() => chooseEbookCover(item)}>{ebookCoverUploadingId === item.id ? 'Uploading cover…' : item.thumbnail_url ? 'Change Cover' : 'Add Cover'}</IonButton><IonButton expand="block" fill="outline" color="danger" style={{ marginTop: 8 }} onClick={() => void deleteEbook(item)}>Delete E-Book</IonButton></>}</div></article>)}</div> : <div className="research-empty-state"><strong>No PDFs in this subject folder.</strong></div>}</>}
                         </section>;
                       })()}
                     </>
@@ -4177,6 +7110,7 @@ function App() {
               {/* RESEARCH LIBRARY */}
               {page === 'research' && (
                 <section className={`research-library-page research-view-${researchView}`}>
+                  <input ref={researchCollectionCoverInputRef} type="file" accept="image/png,image/jpeg,image/webp" hidden aria-label="Choose Research Collection photo" onChange={(event) => void uploadResearchCollectionCover(event)} />
                   <input
                     ref={researchPdfInputRef}
                     type="file"
@@ -4210,7 +7144,7 @@ function App() {
                   {isAdmin && researchView === 'collections' && (
                     <div className="research-admin-tools">
                       <p><strong>Manage Research</strong><br /><small>Add actual Peñaranda Off-Campus research, BSIT capstones, or faculty research. Mark records Verified only after checking the original document. Do not enter invented titles or authors.</small></p>
-                      <IonButton onClick={() => void saveResearch()}>+ Add Research</IonButton>
+                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}><IonButton fill="outline" onClick={() => void addCourse()}>+ Add Course</IonButton><IonButton fill="outline" color="danger" onClick={() => void deleteCourse()} disabled={!additionalCourses.length}>Delete Course</IonButton><IonButton onClick={() => void saveResearch()}>+ Add Research</IonButton></div>
                     </div>
                   )}
 
@@ -4236,7 +7170,7 @@ function App() {
                                   <button type="button" className="research-result" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '7px', width: '100%', minWidth: 0, padding: '0', border: 0, background: 'transparent', color: '#17324f', textAlign: 'left', cursor: 'pointer', whiteSpace: 'normal', overflowWrap: 'anywhere' }} onClick={() => { setSelectedResearchCourse(getResearchCollectionKey(item.course)); setSelectedResearchId(item.id); setResearchView('reader'); }}>
                                     <strong style={{ fontSize: '16px', lineHeight: 1.45, fontWeight: 750, overflowWrap: 'anywhere' }}>{item.title}</strong>
                                     <span style={{ fontSize: '13px', lineHeight: 1.45, color: '#9a6a08', fontWeight: 650, overflowWrap: 'anywhere' }}>{item.research_type || 'Research Paper'} · {item.subject} · {getResearchCollectionKey(item.course)}</span>
-                                    <small style={{ fontSize: '12px', lineHeight: 1.5, color: '#64748b', overflowWrap: 'anywhere' }}>{item.authors} · {item.year} · {item.campus}</small>
+                                    <small style={{ fontSize: '12px', lineHeight: 1.5, color: '#64748b', overflowWrap: 'anywhere' }}>{item.authors} · {item.year}{item.teacher ? ` · Teacher: ${item.teacher}` : ''} · {item.campus}</small>
                                     {item.has_pdf && <small className="research-pdf-status">✓ Full-text PDF available</small>}
                                   </button>
                                   {isAdmin && <div className="research-item-actions"><IonButton size="small" fill="clear" onClick={() => void saveResearch(item)}>Edit</IonButton><IonButton size="small" fill="outline" disabled={pdfUploadingResearchId === item.id} onClick={() => chooseResearchPdfUpload(item)}>{pdfUploadingResearchId === item.id ? 'Uploading…' : item.has_pdf ? 'Replace PDF' : 'Upload PDF'}</IonButton><IonButton size="small" color="danger" fill="clear" onClick={() => void deleteResearch(item)}>Delete</IonButton></div>}
@@ -4248,31 +7182,59 @@ function App() {
                       </div>
                     ) : (
                       <div className="research-course-cards" aria-label="Choose a course">
-                        {RESEARCH_COURSE_OPTIONS.map((courseOption, index) => {
+                        {availableCourseOptions.map((courseOption, index) => {
                           const courseName = courseOption.value;
                           const count = researchItems.filter((item) => getResearchCollectionKey(item.course) === getResearchCollectionKey(courseName)).length;
+                          const courseCode = courseName.toUpperCase();
+                          const isBuiltInCollection = ['BSIT', 'BSBA', 'BSED'].includes(courseCode);
+                          // Newly added course collections start with an empty cover.
+                          // Only the built-in courses use the bundled default artwork.
+                          const defaultCover = isBuiltInCollection ? `/images/research-${courseCode.toLowerCase()}.jpeg` : null;
+                          const coverSrc = researchCollectionCovers[courseCode] || defaultCover;
                           return (
-                            <button
-                              type="button"
-                              className={`research-course-card research-course-card-${index + 1}`}
-                              key={courseName}
-                              onClick={() => { setSelectedResearchCourse(courseName); setSelectedResearchId(null); setResearchQuery(''); setResearchView('course'); }}
-                            >
-                              <div className="research-course-cover" style={{ position: 'relative', overflow: 'hidden', width: '100%', height: 'auto', aspectRatio: '1 / 1', padding: 0, margin: 0, boxSizing: 'border-box', borderRadius: 18, background: 'transparent' }}>
-                                <img
-                                  src={`/images/research-${courseOption.value.toLowerCase()}.jpeg`}
-                                  alt={`${courseOption.shortName} research collection cover`}
-                                  loading="lazy"
-                                  style={{ position: 'absolute', inset: 0, display: 'block', width: '100%', height: '100%', maxWidth: 'none', objectFit: 'cover', objectPosition: 'center', padding: 0, margin: 0, borderRadius: 'inherit' }}
-                                />
-                              </div>
-                              <div className="research-course-card-info">
-                                <span className="research-course-category">RESEARCH COLLECTION</span>
-                                <strong>{courseOption.label}</strong>
-                                <span className="research-course-subtitle">{courseOption.description}</span>
-                                <div className="research-course-card-footer"><span className="research-count-pill">{count} {count === 1 ? 'research' : 'researches'}</span><span>Open collection →</span></div>
-                              </div>
-                            </button>
+                            <div className="research-course-card-shell" key={courseName} style={{ position: 'relative', minWidth: 0 }}>
+                              <button
+                                type="button"
+                                className={`research-course-card research-course-card-${index + 1}`}
+                                style={{ width: '100%' }}
+                                onClick={() => { setSelectedResearchCourse(courseName); setSelectedResearchId(null); setResearchQuery(''); setResearchView('course'); }}
+                              >
+                                <div className="research-course-cover" style={{ position: 'relative', overflow: 'hidden', width: '100%', height: 'auto', aspectRatio: '1 / 1', padding: 0, margin: 0, boxSizing: 'border-box', borderRadius: 18, background: coverSrc ? 'transparent' : 'linear-gradient(145deg, #102b4e 0%, #1d5b86 58%, #d5a642 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                  {coverSrc ? (
+                                    <img
+                                      src={coverSrc}
+                                      alt={`${courseOption.shortName} research collection cover`}
+                                      loading="lazy"
+                                      style={{ position: 'absolute', inset: 0, display: 'block', width: '100%', height: '100%', maxWidth: 'none', objectFit: 'cover', objectPosition: 'center', padding: 0, margin: 0, borderRadius: 'inherit' }}
+                                    />
+                                  ) : (
+                                    <div aria-label={`${courseCode} default course cover`} style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 10, color: '#fff', textAlign: 'center', padding: 16 }}>
+                                      <span style={{ fontSize: 'clamp(28px, 7vw, 54px)', lineHeight: 1, fontWeight: 900, letterSpacing: 1.5 }}>{courseCode}</span>
+                                      <span style={{ width: 52, height: 3, borderRadius: 99, background: '#e4b84f' }} />
+                                      <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: 3 }}>LIBTRACK RESEARCH</span>
+                                    </div>
+                                  )}
+                                </div>
+                                <div className="research-course-card-info">
+                                  <span className="research-course-category">RESEARCH COLLECTION</span>
+                                  <strong>{courseOption.label}</strong>
+                                  <span className="research-course-subtitle">{courseOption.description}</span>
+                                  <div className="research-course-card-footer"><span className="research-count-pill">{count} {count === 1 ? 'research' : 'researches'}</span><span>Open collection →</span></div>
+                                </div>
+                              </button>
+                              {isAdmin && (
+                                <IonButton
+                                  size="small"
+                                  fill="solid"
+                                  color="light"
+                                  disabled={researchCollectionCoverUploading === courseCode}
+                                  onClick={() => chooseResearchCollectionCover(courseCode)}
+                                  style={{ position: 'absolute', top: 12, right: 12, zIndex: 3, '--border-radius': '10px', fontWeight: 700 }}
+                                >
+                                  {researchCollectionCoverUploading === courseCode ? 'Uploading…' : 'Edit Photo'}
+                                </IonButton>
+                              )}
+                            </div>
                           );
                         })}
                       </div>
@@ -4302,9 +7264,9 @@ function App() {
                             {courseItems.map((item) => (
                               <div className="research-result-row" key={item.id} style={{ display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: '10px', padding: '16px 18px', border: '1px solid #dbe4ef', borderRadius: '14px', background: '#ffffff', boxShadow: '0 2px 8px rgba(20, 43, 70, 0.05)', minWidth: 0 }}>
                                 <button type="button" className="research-result" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '7px', width: '100%', minWidth: 0, padding: '0', border: 0, background: 'transparent', color: '#17324f', textAlign: 'left', cursor: 'pointer', whiteSpace: 'normal', overflowWrap: 'anywhere' }} onClick={() => { setSelectedResearchId(item.id); setResearchView('reader'); }}>
-                                  <strong style={{ fontSize: '16px', lineHeight: 1.45, fontWeight: 750, overflowWrap: 'anywhere' }}>{item.title}</strong>
+                                    <strong style={{ fontSize: '16px', lineHeight: 1.45, fontWeight: 750, overflowWrap: 'anywhere' }}>{item.title}</strong>
                                   <span style={{ fontSize: '13px', lineHeight: 1.45, color: '#9a6a08', fontWeight: 650, overflowWrap: 'anywhere' }}>{item.subject}</span>
-                                  <small style={{ fontSize: '12px', lineHeight: 1.5, color: '#64748b', overflowWrap: 'anywhere' }}>{item.authors} · {item.year}</small>
+                                  <small style={{ fontSize: '12px', lineHeight: 1.5, color: '#64748b', overflowWrap: 'anywhere' }}>{item.authors} · {item.year}{item.teacher ? ` · Teacher: ${item.teacher}` : ''}</small>
                                   <small style={{ fontSize: '12px', lineHeight: 1.5, color: '#64748b', overflowWrap: 'anywhere' }}>{item.campus}</small>
                                   {item.has_pdf && <small className="research-pdf-status">✓ Full-text PDF available</small>}
                                 </button>
@@ -4336,6 +7298,7 @@ function App() {
                               <span className="eyebrow">{getResearchCollectionKey(selected.course)} · {selected.subject} · FULL-TEXT READER</span>
                               <h3>{selected.title}</h3>
                               <p><strong>Authors:</strong> {selected.authors}</p>
+                              {selected.teacher && <p><strong>Research Teacher / Adviser:</strong> {selected.teacher}</p>}
                               <p><strong>Year:</strong> {selected.year}</p>
                               <p><strong>Source / campus:</strong> {selected.campus}</p>
                               {selected.verification_status && <p><strong>Source status:</strong> {selected.verification_status}</p>}
@@ -4358,7 +7321,7 @@ function App() {
                             </div>
                             <div className="research-pdf-frame research-reader-page-frame">
                               {selected.has_pdf && selected.pdf_url ? (
-                                <iframe key={`uploaded-${selected.id}`} src={`${API}${selected.pdf_url}#toolbar=1&navpanes=0&view=FitH`} title={`Read uploaded PDF: ${selected.title}`} loading="lazy" />
+                                <iframe key={`uploaded-${selected.id}`} src={`${API}${selected.pdf_url}#toolbar=0&navpanes=0&view=FitH`} title={`Read uploaded PDF: ${selected.title}`} loading="lazy" />
                               ) : selected.url ? (
                                 <iframe key={`external-${selected.id}`} src={selected.url} title={`Read ${selected.title}`} loading="lazy" />
                               ) : (
@@ -4375,6 +7338,1194 @@ function App() {
               )}
 
               {/* BORROWING ACTIVITY */}
+
+              {/* ADMIN INVENTORY: BOOKS, RESEARCH, AND E-BOOKS */}
+              {page === 'borrowingStats' && isAdmin && (
+                <section className="inventory-page" style={{ maxWidth: 1440, margin: '0 auto', padding: '8px 4px 40px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', gap: 18, flexWrap: 'wrap', marginBottom: 24 }}>
+                    <div>
+                      <span className="eyebrow">REPORTS AND ANALYTICS</span>
+                      <h2 style={{ margin: '7px 0 6px', fontSize: 30, lineHeight: 1.2, fontWeight: 800, color: '#17324d' }}>Borrowing Statistics</h2>
+                      <p style={{ margin: 0, color: '#718096', fontSize: 14, lineHeight: 1.5 }}>Actual borrowing transactions by department for A.Y. 2026–2027. Mid-Year is excluded.</p>
+                    </div>
+                    <IonButton fill="outline" disabled={borrowingStatsLoading} onClick={async () => {
+                      setBorrowingStatsLoading(true); setBorrowingStatsError('');
+                      try {
+                        const response = await fetch(`${API}/reports/borrowing-statistics?academic_year=2026-2027`, { headers: { Authorization: `Bearer ${token}` } });
+                        setBorrowingStats(await readResponse(response));
+                      } catch (error: any) { setBorrowingStatsError(error?.message || 'Unable to refresh statistics.'); }
+                      finally { setBorrowingStatsLoading(false); }
+                    }}>{borrowingStatsLoading ? <IonSpinner name="crescent" /> : '↻ Refresh'}</IonButton>
+                  </div>
+
+                  <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', margin: '0 0 24px' }}>
+                    {([['all', 'All Semesters'], ['1st', '1st Semester'], ['2nd', '2nd Semester']] as const).map(([value, label]) =>
+                      <IonButton key={value} size="small" fill={borrowingStatsSemester === value ? 'solid' : 'outline'} onClick={() => setBorrowingStatsSemester(value)}>{label}</IonButton>)}
+                  </div>
+
+                  {borrowingStatsError && <IonText color="danger"><p role="alert">{borrowingStatsError}</p></IonText>}
+                  {borrowingStatsLoading && !borrowingStats && <div className="empty-state"><IonSpinner name="crescent" /><p>Loading borrowing statistics...</p></div>}
+                  {borrowingStats && (() => {
+                    const semesters = borrowingStatsSemester === 'all' ? borrowingStats.semesters : borrowingStats.semesters.filter((item: any) => item.key === borrowingStatsSemester);
+                    const rows = ['BSIT', 'BSED', 'BSBA'].map(department => ({ department, total: semesters.reduce((sum: number, semester: any) => sum + (semester.departments?.[department]?.total || 0), 0) }));
+                    const grandTotal = rows.reduce((sum, row) => sum + row.total, 0);
+                    const maxValue = Math.max(1, ...rows.map(row => row.total));
+                    const kpiStyle: React.CSSProperties = { background: '#ffffff', border: '1px solid #e2e8f0', borderRadius: 16, padding: '20px 22px', minWidth: 0, boxShadow: '0 3px 12px rgba(20, 45, 70, .05)' };
+                    return <>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: 16, marginBottom: 24 }}>
+                        <article style={{ ...kpiStyle, borderTop: '4px solid #d8a52b' }}>
+                          <span style={{ display: 'block', color: '#718096', fontSize: 13, fontWeight: 700, marginBottom: 9 }}>TOTAL BORROWINGS</span>
+                          <strong style={{ display: 'block', color: '#17324d', fontSize: 32, lineHeight: 1.1 }}>{grandTotal.toLocaleString()}</strong>
+                          <small style={{ display: 'block', color: '#8492a6', marginTop: 8 }}>Approved borrowing transactions</small>
+                        </article>
+                        {rows.map(row => <article key={row.department} style={kpiStyle}>
+                          <span style={{ display: 'block', color: '#718096', fontSize: 13, fontWeight: 700, marginBottom: 9 }}>{row.department}</span>
+                          <strong style={{ display: 'block', color: '#17324d', fontSize: 32, lineHeight: 1.1 }}>{row.total.toLocaleString()}</strong>
+                          <small style={{ display: 'block', color: '#8492a6', marginTop: 8 }}>Borrowing transactions</small>
+                        </article>)}
+                      </div>
+
+                      <section style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: 16, padding: '22px 24px', marginBottom: 24, boxShadow: '0 3px 12px rgba(20, 45, 70, .04)' }}>
+                        <h3 style={{ margin: '0 0 5px', color: '#17324d', fontSize: 20, fontWeight: 750 }}>Borrowings per Department</h3>
+                        <p style={{ margin: '0 0 22px', color: '#8492a6', fontSize: 13 }}>Comparison of total borrowing transactions for each department.</p>
+                        {rows.map(row => (
+                          <div key={row.department} style={{ margin: '0 0 20px' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginBottom: 8 }}>
+                              <strong style={{ color: '#243b53', fontSize: 14 }}>{row.department}</strong>
+                              <strong style={{ color: '#17324d', fontSize: 14, fontVariantNumeric: 'tabular-nums' }}>{row.total.toLocaleString()}</strong>
+                            </div>
+                            <div style={{ height: 12, borderRadius: 99, background: '#edf1f5', overflow: 'hidden' }}>
+                              <div style={{ height: '100%', width: `${row.total / maxValue * 100}%`, borderRadius: 99, background: 'linear-gradient(90deg, #d5a126, #f0c75c)', transition: 'width .25s ease' }} />
+                            </div>
+                          </div>
+                        ))}
+                      </section>
+
+                      <section style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: 16, padding: '22px 24px', boxShadow: '0 3px 12px rgba(20, 45, 70, .04)' }}>
+                        <h3 style={{ margin: '0 0 18px', color: '#17324d', fontSize: 20, fontWeight: 750 }}>Semester Breakdown</h3>
+                        {semesters.map((semester: any) => <div key={semester.key} style={{ marginTop: 18, paddingTop: 18, borderTop: '1px solid #edf1f5' }}>
+                          <h4 style={{ margin: '0 0 5px', color: '#243b53', fontSize: 17, fontWeight: 750 }}>{semester.label}</h4>
+                          <p style={{ margin: '0 0 14px', color: '#8492a6', fontSize: 13 }}>{semester.date_range}</p>
+                          <div style={{ overflowX: 'auto' }}>
+                            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 460, fontSize: 14 }}>
+                              <thead><tr style={{ background: '#f5f7fa' }}>
+                                <th style={{ textAlign: 'left', padding: '12px 14px', color: '#526579', fontWeight: 700 }}>Department</th>
+                                <th style={{ textAlign: 'right', padding: '12px 14px', color: '#526579', fontWeight: 700 }}>Borrowings</th>
+                                <th style={{ textAlign: 'right', padding: '12px 14px', color: '#526579', fontWeight: 700 }}>Unique Books</th>
+                              </tr></thead>
+                              <tbody>{['BSIT', 'BSED', 'BSBA'].map((department: string) => {
+                                const item = semester.departments?.[department] || { total: 0, unique_books: 0 };
+                                return <tr key={department} style={{ borderBottom: '1px solid #edf1f5' }}>
+                                  <td style={{ padding: '12px 14px', color: '#243b53', fontWeight: 650 }}>{department}</td>
+                                  <td style={{ padding: '12px 14px', textAlign: 'right', color: '#243b53', fontVariantNumeric: 'tabular-nums' }}>{item.total}</td>
+                                  <td style={{ padding: '12px 14px', textAlign: 'right', color: '#243b53', fontVariantNumeric: 'tabular-nums' }}>{item.unique_books}</td>
+                                </tr>;
+                              })}</tbody>
+                            </table>
+                          </div>
+                          <h5 style={{ margin: '18px 0 9px', color: '#243b53', fontSize: 14, fontWeight: 750 }}>Most Borrowed Books</h5>
+                          {(semester.top_books || []).length
+                            ? <ol style={{ margin: 0, paddingLeft: 22, color: '#526579', lineHeight: 1.9 }}>{semester.top_books.map((book: any, index: number) => <li key={`${book.title}-${index}`}>{book.title} <strong style={{ color: '#17324d' }}>— {book.total} borrowings</strong></li>)}</ol>
+                            : <p style={{ color: '#8492a6', fontSize: 13 }}>No borrowing records for this semester.</p>}
+                        </div>)}
+                      </section>
+                    </>;
+                  })()}
+                  {!borrowingStatsLoading && !borrowingStats && !borrowingStatsError && <div className="empty-state"><p>No statistics available yet.</p></div>}
+                </section>
+              )}
+
+              {page === 'inventory' && isAdmin && (
+                <section className="inventory-page">
+                  <div className="inventory-heading">
+                    <div>
+                      <span className="eyebrow">COLLECTION MANAGEMENT</span>
+                      <h2>Library Inventory</h2>
+                      <p>Complete records for physical books, research materials, and digital books.</p>
+                    </div>
+                    <div className="inventory-actions">
+                      <IonButton fill="outline" onClick={() => void loadInventory()} disabled={inventoryLoading}>
+                        {inventoryLoading ? <IonSpinner name="crescent" /> : '↻ Refresh'}
+                      </IonButton>
+                      <IonButton className="gold-button" onClick={exportInventoryCsv} disabled={inventoryLoading}>
+                        ↓ Export Excel (CSV)
+                      </IonButton>
+                    </div>
+                  </div>
+
+                  <div className="inventory-summary-grid">
+                    <button type="button" className={`inventory-summary-card ${inventoryTab === 'books' ? 'active' : ''}`} onClick={() => { setInventoryTab('books'); setInventoryQuery(''); }}>
+                      <span className="inventory-summary-icon">📚</span>
+                      <span><small>Physical book titles</small><strong>{books.length}</strong><em>{books.reduce((sum, item) => sum + (Number(item.total_copies) || 0), 0)} total copies</em></span>
+                    </button>
+                    <button type="button" className={`inventory-summary-card ${inventoryTab === 'research' ? 'active' : ''}`} onClick={() => { setInventoryTab('research'); setInventoryQuery(''); }}>
+                      <span className="inventory-summary-icon">📄</span>
+                      <span><small>Research materials</small><strong>{researchItems.length}</strong><em>{researchItems.filter((item) => item.has_pdf).length} with PDF file</em></span>
+                    </button>
+                    <button type="button" className={`inventory-summary-card ${inventoryTab === 'ebooks' ? 'active' : ''}`} onClick={() => { setInventoryTab('ebooks'); setInventoryQuery(''); }}>
+                      <span className="inventory-summary-icon">💻</span>
+                      <span><small>E-book files</small><strong>{ebooks.length}</strong><em>Digital collection</em></span>
+                    </button>
+                  </div>
+
+                  <div className="inventory-toolbar">
+                    <div className="inventory-tabs" role="tablist" aria-label="Inventory category">
+                      <button type="button" role="tab" aria-selected={inventoryTab === 'books'} className={inventoryTab === 'books' ? 'active' : ''} onClick={() => { setInventoryTab('books'); setInventoryQuery(''); }}>Books</button>
+                      <button type="button" role="tab" aria-selected={inventoryTab === 'research'} className={inventoryTab === 'research' ? 'active' : ''} onClick={() => { setInventoryTab('research'); setInventoryQuery(''); }}>Research</button>
+                      <button type="button" role="tab" aria-selected={inventoryTab === 'ebooks'} className={inventoryTab === 'ebooks' ? 'active' : ''} onClick={() => { setInventoryTab('ebooks'); setInventoryQuery(''); }}>E-books</button>
+                    </div>
+                    <input className="inventory-search" value={inventoryQuery} onChange={(event) => setInventoryQuery(event.target.value)} placeholder={`Search ${inventoryTab} inventory...`} aria-label="Search inventory" />
+                  </div>
+
+                  {inventoryError && <div className="inventory-error" role="alert">{inventoryError}</div>}
+                  {inventoryLoading ? (
+                    <div className="inventory-empty"><IonSpinner name="crescent" /><span>Loading complete inventory...</span></div>
+                  ) : (
+                    <div className="inventory-table-wrap">
+                      {inventoryTab === 'books' && (
+                        <table className="inventory-table">
+                          <thead><tr><th>ID</th><th>Book Title</th><th>Author</th><th>Category</th><th>Call Number</th><th>Total</th><th>Available</th><th>Borrowed</th></tr></thead>
+                          <tbody>
+                            {books.filter((item) => [item.title, item.author, item.category, item.call_number].some((value) => String(value || '').toLowerCase().includes(inventoryQuery.toLowerCase()))).map((item) => (
+                              <tr key={item.id}><td>{item.id}</td><td className="inventory-title-cell">{item.title}</td><td>{item.author}</td><td>{item.category}</td><td>{item.call_number || '—'}</td><td>{item.total_copies}</td><td><span className="inventory-status available">{item.available_copies}</span></td><td>{Math.max(0, item.total_copies - item.available_copies)}</td></tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      )}
+                      {inventoryTab === 'research' && (
+                        <table className="inventory-table">
+                          <thead><tr><th>ID</th><th>Research Title</th><th>Authors</th><th>Year</th><th>Course</th><th>Subject</th><th>Type</th><th>Verification</th><th>PDF</th></tr></thead>
+                          <tbody>
+                            {researchItems.filter((item) => [item.title, item.authors, item.year, item.course, item.subject, item.research_type, item.verification_status].some((value) => String(value || '').toLowerCase().includes(inventoryQuery.toLowerCase()))).map((item) => (
+                              <tr key={item.id}><td>{item.id}</td><td className="inventory-title-cell">{item.title}</td><td>{item.authors}</td><td>{item.year}</td><td>{item.course}</td><td>{item.subject}</td><td>{item.research_type || '—'}</td><td>{item.verification_status || 'Unverified'}</td><td><span className={`inventory-status ${item.has_pdf ? 'available' : 'missing'}`}>{item.has_pdf ? 'Available' : 'No PDF'}</span></td></tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      )}
+                      {inventoryTab === 'ebooks' && (
+                        <table className="inventory-table">
+                          <thead><tr><th>ID</th><th>E-book Title</th><th>Author</th><th>Category</th><th>Course</th><th>Year</th><th>Semester</th><th>Subject</th><th>File</th><th>Size</th></tr></thead>
+                          <tbody>
+                            {ebooks.filter((item) => [item.title, item.author, item.category, item.course, item.year, item.semester, item.subject, item.file_name].some((value) => String(value || '').toLowerCase().includes(inventoryQuery.toLowerCase()))).map((item) => (
+                              <tr key={item.id}><td>{item.id}</td><td className="inventory-title-cell">{item.title}</td><td>{item.author}</td><td>{item.category}</td><td>{item.course || '—'}</td><td>{item.year || '—'}</td><td>{item.semester || '—'}</td><td>{item.subject || '—'}</td><td>{item.file_name}</td><td>{item.size || '—'}</td></tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      )}
+                      {((inventoryTab === 'books' && books.length === 0) || (inventoryTab === 'research' && researchItems.length === 0) || (inventoryTab === 'ebooks' && ebooks.length === 0)) && (
+                        <div className="inventory-empty">No records found in this collection.</div>
+                      )}
+                    </div>
+                  )}
+                  <p className="inventory-footnote">Inventory data is read from the existing LibTrack collections. No records are changed by viewing or exporting this page.</p>
+                </section>
+              )}
+
+              {/* BOOK CATALOG AND MANAGEMENT */}
+
+              {(page === 'books' || (page === 'home' && !isAdmin)) && (
+
+                <section className="catalog-section home-embedded-catalog">
+
+                  <div className="section-heading">
+
+                    <div>
+
+                      <span className="eyebrow">
+
+                        {isAdmin ? 'CATALOG MANAGEMENT' : 'FIND YOUR NEXT READ'}
+
+                      </span>
+
+                      {(isAdmin || page === 'books') && (
+                        <h2>{isAdmin ? 'Book Inventory' : 'Book Catalog'}</h2>
+                      )}
+
+                      <p>
+
+                        {isAdmin
+
+                          ? 'Review, add, edit, and delete book records.'
+
+                          : 'Search books and check availability.'}
+
+                      </p>
+
+                    </div>
+
+                    {isAdmin && (
+
+                      <IonButton
+
+                        className="gold-button"
+
+                        onClick={() => void saveBook()}
+
+                        disabled={savingBook}
+
+                      >
+
+                        {savingBook ? (
+
+                          <IonSpinner name="crescent" />
+
+                        ) : (
+
+                          '+ Add Book'
+
+                        )}
+
+                      </IonButton>
+
+                    )}
+
+                  </div>
+
+                  {page === 'books' && isStudent && isPhilippineWeekend() && (
+                    <div
+                      role="status"
+                      aria-live="polite"
+                      style={{
+                        display: 'flex',
+                        alignItems: 'flex-start',
+                        gap: '12px',
+                        margin: '14px 0 18px',
+                        padding: '15px 17px',
+                        border: '1px solid #f1d39a',
+                        borderLeft: '5px solid #d99a2b',
+                        borderRadius: '14px',
+                        background: '#fff8e8',
+                        color: '#684b18',
+                        lineHeight: 1.55,
+                      }}
+                    >
+                      <span aria-hidden="true" style={{ fontSize: '22px' }}>🗓️</span>
+                      <div>
+                        <strong style={{ display: 'block', marginBottom: '4px' }}>
+                          No Book Borrowing on Saturdays and Sundays
+                        </strong>
+                        <span>
+                          Book borrowing is not available on Saturdays and Sundays.
+                          Please visit the library during regular operating days (Monday-Friday).
+                        </span>
+                      </div>
+                    </div>
+                  )}
+
+                  <IonSearchbar
+
+                    value={query}
+
+                    onIonInput={(e) => setQuery(e.detail.value || '')}
+
+                    placeholder="Search books or authors..."
+
+                  />
+
+                  {page === 'books' && (
+
+                    <div className="category-filter">
+
+                      <button
+
+                        type="button"
+
+                        className={`category-chip ${
+
+                          selectedCategory === '' ? 'active' : ''
+
+                        }`}
+
+                        onClick={() => setSelectedCategory('')}
+
+                      >
+
+                        All Categories
+
+                      </button>
+
+                      {categories.map((category) => (
+
+                        <button
+
+                          type="button"
+
+                          key={category}
+
+                          className={`category-chip ${
+
+                            selectedCategory === category ? 'active' : ''
+
+                          }`}
+
+                          onClick={() => setSelectedCategory(category)}
+
+                        >
+
+                          {displayCategoryName(category)}
+
+                        </button>
+
+                      ))}
+
+                    </div>
+
+                  )}
+
+                  {booksLoading ? (
+
+                    <div className="loading-row">
+
+                      <IonSpinner name="crescent" />
+
+                      <span>Loading catalog...</span>
+
+                    </div>
+
+                  ) : filteredBooks.length > 0 && isAdmin ? (
+
+                    <div className="admin-table-wrap">
+
+                      <table className="admin-book-table">
+
+                        <thead>
+
+                          <tr>
+
+                            <th>Book title</th>
+
+                            <th>Author</th>
+
+                            <th>Category</th>
+
+                            <th>Copies</th>
+
+                            <th>Status</th>
+
+                            <th>Actions</th>
+
+                          </tr>
+
+                        </thead>
+
+                        <tbody>
+
+                          {filteredBooks.map((book) => (
+
+                            <tr key={book.id}>
+
+                              <td>
+
+                                <strong>{book.title}</strong>
+
+                                <small>Book ID: {book.id}</small>
+
+                              </td>
+
+                              <td><AuthorDisplay book={book} /></td>
+
+                              <td>{displayCategoryName(book.category || 'General', book.title)}</td>
+
+                              <td>
+
+                                {book.available_copies}/{book.total_copies}
+
+                              </td>
+
+                              <td>
+
+                                <IonBadge
+
+                                  color={book.available ? 'success' : 'medium'}
+
+                                >
+
+                                  {book.available ? 'Available' : 'Unavailable'}
+
+                                </IonBadge>
+
+                              </td>
+
+                              <td>
+
+                                <div className="inventory-actions">
+
+                                  <IonButton
+
+                                    size="small"
+
+                                    fill="outline"
+
+                                    onClick={() => void saveBook(book)}
+
+                                    disabled={savingBook}
+
+                                  >
+
+                                    Edit
+
+                                  </IonButton>
+
+                                  <IonButton
+
+                                    size="small"
+
+                                    color="danger"
+
+                                    fill="outline"
+
+                                    onClick={() => void deleteBook(book)}
+
+                                  >
+
+                                    Delete
+
+                                  </IonButton>
+
+                                </div>
+
+                              </td>
+
+                            </tr>
+
+                          ))}
+
+                        </tbody>
+
+                      </table>
+
+                    </div>
+
+                  ) : filteredBooks.length > 0 ? (
+
+                    <div className="book-grid">
+
+                      {filteredBooks.map((book, index) => (
+
+                        <article key={book.id} className="book-tile">
+
+                          <BookCover book={book} index={index} />
+
+                          <div className="book-info">
+
+                            <button
+
+                              type="button"
+
+                              className="book-category category-link"
+
+                              onClick={() => {
+
+                                setSelectedCategory(canonicalBookCategory(book.category || 'General', book.title));
+
+                                setPage('categories');
+
+                              }}
+
+                            >
+
+                              {displayCategoryName(book.category || 'General', book.title)}
+
+                            </button>
+
+                            <h3>{book.title}</h3>
+
+                            <p><AuthorDisplay book={book} prefix="by " /></p>
+
+                            <div className="book-meta">
+
+                              <IonBadge
+
+                                color={book.available ? 'success' : 'medium'}
+
+                              >
+
+                                {book.available
+
+                                  ? `${book.available_copies} available`
+
+                                  : 'Unavailable'}
+
+                              </IonBadge>
+
+                              <span>
+
+                                {book.available_copies}/{book.total_copies} copies
+
+                              </span>
+
+                            </div>
+
+                            <button
+                              type="button"
+                              onClick={() => setSelectedBook(book)}
+                              style={{ marginTop: '14px', border: '1px solid #b99a62', borderRadius: '10px', padding: '9px 12px', background: 'transparent', color: 'inherit', cursor: 'pointer', fontWeight: 600 }}
+                            >
+                              View About This Book →
+                            </button>
+
+                          </div>
+
+                        </article>
+
+                      ))}
+
+                    </div>
+
+                  ) : (
+
+                    <div className="empty-state">
+
+                      <h3>No books found</h3>
+
+                      <p>Try a different search or category.</p>
+
+                    </div>
+
+                  )}
+
+
+
+                </section>
+
+              )}
+
+              {/* ALL REGISTERED ACCOUNTS */}
+
+              {page === 'accounts' && isAdmin && (
+                <>
+                <section className="logged-in-section">
+
+                  <div className="logged-in-heading">
+
+                    <div>
+
+                      <span className="eyebrow">USER MANAGEMENT</span>
+
+                      <h2>All Registered Accounts</h2>
+
+                    </div>
+
+                    <IonBadge color="primary">
+
+                      {accounts.length} Total Accounts
+
+                    </IonBadge>
+
+                  </div>
+
+                  <IonSearchbar
+
+                    value={accountQuery}
+
+                    onIonInput={(e) =>
+
+                      setAccountQuery(e.detail.value || '')
+
+                    }
+
+                    placeholder="Search by name, School ID, course, year, or section..."
+
+                  />
+
+                  {accountsError && (
+
+                    <IonText color="danger">
+
+                      <p role="alert">
+
+                        Could not load accounts: {accountsError}
+
+                      </p>
+
+                    </IonText>
+
+                  )}
+
+                  <div role="tablist" aria-label="Filter accounts by course" style={{ display: 'flex', alignItems: 'center', gap: 8, overflowX: 'auto', padding: '8px 4px 14px', margin: '4px 0 8px', borderBottom: '1px solid #e2e8f0' }}>
+                    {['BSIT', 'BSED', 'BSBA', 'FACULTY ACCOUNTS', 'ADMIN ACCOUNTS']
+                      .map((name) => {
+                        const count = accountCourseGroups.find(([groupName]) => groupName === name)?.[1].length || 0;
+                        const active = visibleAccountGroup === name;
+                        return (
+                          <button
+                            key={name}
+                            type="button"
+                            role="tab"
+                            aria-selected={active}
+                            onClick={() => { setSelectedAccountGroup(name); setExpandedStudentId(null); }}
+                            style={{ flex: '0 0 auto', border: active ? '1px solid #173b60' : '1px solid #dbe3eb', borderRadius: 10, padding: '10px 18px', background: active ? '#173b60' : '#edf2f7', color: active ? '#ffffff' : '#526174', fontWeight: 800, fontSize: 13, cursor: 'pointer', whiteSpace: 'nowrap' }}
+                          >
+                            {name === 'ADMIN ACCOUNTS' ? 'ADMIN' : name === 'FACULTY ACCOUNTS' ? 'FACULTY' : name}
+                            <span style={{ marginLeft: 7, opacity: active ? 0.82 : 0.72, fontWeight: 650 }}>({count})</span>
+                          </button>
+                        );
+                      })}
+                  </div>
+
+                  {accountsLoading && accounts.length === 0 ? (
+
+                    <div className="sessions-loading">
+
+                      <IonSpinner name="crescent" />
+
+                      <span>Loading all accounts...</span>
+
+                    </div>
+
+                  ) : (
+
+                    <div className="sessions-table-wrap">
+
+                      <table className="sessions-table">
+
+                        <thead>
+
+                          <tr>
+
+                            <th>Account</th>
+
+                            {visibleAccountGroup !== 'FACULTY ACCOUNTS' && visibleAccountGroup !== 'ADMIN ACCOUNTS' && (
+                              <>
+                                <th>School ID</th>
+                                <th>Course</th>
+                                <th>Year</th>
+                                <th>Section</th>
+                              </>
+                            )}
+
+                            <th>Email</th>
+
+                            <th>Role</th>
+
+                            <th>Status</th>
+
+                            <th>Action</th>
+
+                          </tr>
+
+                        </thead>
+
+                        <tbody>
+
+                          {visibleAccountGroups.map(([courseName, courseAccounts]) => (
+                            <React.Fragment key={courseName}>
+                              <tr>
+                                <td colSpan={visibleAccountGroup === 'FACULTY ACCOUNTS' || visibleAccountGroup === 'ADMIN ACCOUNTS' ? 5 : 9} style={{ background: '#edf3f8', color: '#173b60', fontWeight: 800, letterSpacing: '.04em' }}>
+                                  {courseName}
+                                  {courseName !== 'ADMIN ACCOUNTS' && (
+                                    <span style={{ fontWeight: 600, color: '#64748b' }}>
+                                       ({courseAccounts.length} {courseName === 'FACULTY ACCOUNTS' ? (courseAccounts.length === 1 ? 'faculty member' : 'faculty members') : (courseAccounts.length === 1 ? 'student' : 'students')})
+                                    </span>
+                                  )}
+                                </td>
+                              </tr>
+                              {courseAccounts.map((account) => {
+                                const online = isAccountOnline(account);
+                                const studentBorrowings = borrowings.filter((record) => record.user_id === account.id);
+                                const expanded = expandedStudentId === account.id;
+                                return (
+                                  <React.Fragment key={account.id}>
+                                    <tr>
+                                      <td>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 210 }}>
+                                          <button type="button" aria-label={`Preview ${account.full_name}'s profile photo`} disabled={!account.profile_photo_url} onClick={() => account.profile_photo_url && setProfilePhotoPreview({ url: account.profile_photo_url, name: account.full_name || 'Profile photo' })} style={{ width: 42, height: 42, flex: '0 0 42px', borderRadius: '50%', overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0, background: '#f4c64e', color: '#173b60', border: '2px solid #e2e8f0', fontWeight: 800, fontSize: 16, cursor: account.profile_photo_url ? 'zoom-in' : 'default' }}>
+                                            {account.profile_photo_url ? (
+                                              <img src={account.profile_photo_url} alt={`${account.full_name} profile`} loading="lazy" referrerPolicy="no-referrer" style={{ width: '100%', height: '100%', objectFit: 'cover' }} onError={(event) => { event.currentTarget.style.display = 'none'; }} />
+                                            ) : (account.full_name || account.email || 'U').trim().charAt(0).toUpperCase()}
+                                          </button>
+                                          {String(account.role || '').toLowerCase() === 'admin' ? (
+                                            <div style={{ color: '#173b60', textAlign: 'left' }}>
+                                              <strong>{account.full_name}</strong>
+                                              <small style={{ display: 'block', color: '#64748b' }}>{account.username ? `@${account.username}` : 'Administrator'}</small>
+                                            </div>
+                                          ) : (
+                                            <button type="button" onClick={() => setExpandedStudentId(expanded ? null : account.id)} style={{ border: 0, background: 'transparent', color: '#173b60', padding: 0, textAlign: 'left', cursor: 'pointer', font: 'inherit' }}>
+                                              <strong>{account.full_name}</strong>
+                                              <small style={{ display: 'block', color: '#64748b' }}>{account.username ? `@${account.username}` : account.role?.toLowerCase() === 'faculty' ? 'Faculty account' : 'Student account'} · {expanded ? 'Hide records ▲' : 'View records ▼'}</small>
+                                            </button>
+                                          )}
+                                        </div>
+                                      </td>
+                                      {visibleAccountGroup !== 'FACULTY ACCOUNTS' && visibleAccountGroup !== 'ADMIN ACCOUNTS' && (
+                                        <>
+                                          <td>{account.student_id?.trim() || '—'}</td>
+                                          <td>{account.course?.trim() || '—'}</td>
+                                          <td>{account.year?.trim() || '—'}</td>
+                                          <td>{account.section?.trim() || '—'}</td>
+                                        </>
+                                      )}
+                                      <td>{account.email}</td>
+                                      <td><IonBadge color={account.role.toLowerCase() === 'admin' ? 'warning' : 'medium'}>{account.role}</IonBadge></td>
+                                      <td>{online ? <span className="session-online"><span className="session-online-dot" />Online</span> : <span className="session-offline"><span className="session-offline-dot" />Offline</span>}</td>
+                                      <td>
+                                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+                                          {String(account.role || '').toLowerCase() !== 'admin' && (
+                                            <IonButton size="small" color="primary" fill="outline" onClick={() => void editAccountDetails(account)}>Edit</IonButton>
+                                          )}
+                                          <IonButton size="small" color="danger" fill="outline" disabled={deletingAccountId === account.id || (!!user && account.id === user.id)} onClick={() => deleteAccount(account)}>
+                                            {deletingAccountId === account.id ? 'Deleting...' : 'Delete'}
+                                          </IonButton>
+                                        </div>
+                                      </td>
+                                    </tr>
+                                    {expanded && String(account.role || '').toLowerCase() !== 'admin' && (
+                                      <tr>
+                                        <td colSpan={visibleAccountGroup === 'FACULTY ACCOUNTS' || visibleAccountGroup === 'ADMIN ACCOUNTS' ? 5 : 9} style={{ background: '#f8fafc', padding: 16 }}>
+                                          <div style={{ display: 'grid', gap: 10 }}>
+                                            <strong style={{ color: '#173b60' }}>Borrowing History — {account.full_name}</strong>
+                                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                                              <IonBadge color="primary">{studentBorrowings.length} Total Records</IonBadge>
+                                              <IonBadge color="warning">{studentBorrowings.filter((r) => r.status === 'borrowed').length} Currently Borrowed</IonBadge>
+                                              <IonBadge color="success">{studentBorrowings.filter((r) => r.status === 'returned').length} Returned</IonBadge>
+                                            </div>
+                                            {borrowingsError && <IonText color="danger">{borrowingsError}</IonText>}
+                                            {studentBorrowings.length === 0 ? (
+                                              <span style={{ color: '#64748b' }}>This account has no borrowing records yet.</span>
+                                            ) : (
+                                              <div style={{ overflowX: 'auto' }}>
+                                                <table className="sessions-table">
+                                                  <thead><tr><th>Book Title</th><th>Borrowed Date</th><th>Due Date</th><th>Returned Date</th><th>Status</th></tr></thead>
+                                                  <tbody>
+                                                    {studentBorrowings.map((record) => {
+                                                      const book = books.find((item) => item.id === record.book_id);
+                                                      const overdue = record.status === 'borrowed' && record.due_date < new Date().toISOString().slice(0, 10);
+                                                      return (
+                                                        <tr key={record.id}>
+                                                          <td>{book?.title || `Book #${record.book_id}`}</td>
+                                                          <td>{record.borrowed_at ? new Date(record.borrowed_at).toLocaleDateString('en-PH') : '—'}</td>
+                                                          <td>{record.due_date}</td>
+                                                          <td>{record.returned_at ? new Date(record.returned_at).toLocaleDateString('en-PH') : '—'}</td>
+                                                          <td><IonBadge color={record.status === 'returned' ? 'success' : overdue ? 'danger' : record.status === 'pending' ? 'warning' : 'primary'}>{overdue ? 'Overdue' : record.status}</IonBadge></td>
+                                                        </tr>
+                                                      );
+                                                    })}
+                                                  </tbody>
+                                                </table>
+                                              </div>
+                                            )}
+                                          </div>
+                                        </td>
+                                      </tr>
+                                    )}
+                                  </React.Fragment>
+                                );
+                              })}
+                            </React.Fragment>
+                          ))}
+                          {filteredAccounts.length === 0 && (
+
+                            <tr>
+
+                              <td colSpan={9} className="sessions-empty">
+
+                                {accounts.length === 0
+
+                                  ? 'No registered accounts yet.'
+
+                                  : 'No accounts match your search.'}
+
+                              </td>
+
+                            </tr>
+
+                          )}
+
+                        </tbody>
+
+                      </table>
+
+                    </div>
+
+                  )}
+
+                </section>
+
+                {editingAccount && (
+                  <div role="presentation" onClick={(event) => { if (event.target === event.currentTarget && !accountEditSaving) setEditingAccount(null); }} style={{ position: 'fixed', inset: 0, zIndex: 10000, background: 'rgba(15, 30, 48, .58)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+                    <section role="dialog" aria-modal="true" aria-labelledby="edit-account-title" style={{ width: 'min(720px, 100%)', maxHeight: '92vh', overflowY: 'auto', background: '#fff', borderRadius: 18, boxShadow: '0 18px 60px rgba(0,0,0,.25)' }}>
+                      <header style={{ padding: '20px 24px', background: 'linear-gradient(110deg, #173b60, #315a61)', borderBottom: '5px solid #e9c85b', color: '#fff', borderRadius: '18px 18px 0 0' }}>
+                        <h2 id="edit-account-title" style={{ margin: 0, fontSize: 24 }}>Edit Account</h2>
+                        <p style={{ margin: '6px 0 0', color: 'rgba(255,255,255,.85)', fontSize: 14 }}>Update the account details below.</p>
+                      </header>
+                      <div style={{ padding: 24, display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 14 }}>
+                        {(String(editingAccount.role || '').toLowerCase() === 'faculty'
+                          ? ([
+                              ['Full Name', 'full_name', 'text'], ['Email Address', 'email', 'email'], ['Username', 'username', 'text'],
+                            ] as const)
+                          : ([
+                              ['Full Name', 'full_name', 'text'], ['Email Address', 'email', 'email'], ['Username', 'username', 'text'], ['School ID', 'student_id', 'text'],
+                              ['Course', 'course', 'text'], ['Year', 'year', 'text'], ['Section', 'section', 'text'],
+                            ] as const)
+                        ).map(([label, key, type]) => (
+                          <label key={key} style={{ display: 'grid', gap: 7, color: '#526174', fontSize: 13, fontWeight: 700, minWidth: 0 }}>
+                            {label}
+                            <input type={type} value={accountEditDraft[key]} onChange={(event) => setAccountEditDraft((draft) => ({ ...draft, [key]: event.target.value }))} placeholder={label} style={{ width: '100%', minWidth: 0, boxSizing: 'border-box', minHeight: 52, padding: '0 15px', border: '1px solid #d4dfeb', borderRadius: 13, background: '#f7f9fb', color: '#203047', font: 'inherit', fontWeight: 400 }} />
+                          </label>
+                        ))}
+                      </div>
+                      <footer style={{ position: 'sticky', bottom: 0, display: 'flex', justifyContent: 'flex-end', gap: 12, padding: '16px 24px 22px', background: '#fff', borderTop: '1px solid #e7edf3', borderRadius: '0 0 18px 18px' }}>
+                        <IonButton fill="outline" color="medium" onClick={() => setEditingAccount(null)} disabled={accountEditSaving}>Cancel</IonButton>
+                        <IonButton onClick={() => void saveAccountEdits()} disabled={accountEditSaving}>{accountEditSaving ? <IonSpinner name="crescent" /> : 'Save Changes'}</IonButton>
+                      </footer>
+                    </section>
+                  </div>
+                )}
+                </>
+              )}
+
+              {/* ACTIVE LOGIN SESSIONS */}
+
+              {page === 'sessions' && isAdmin && (
+
+                <section className="logged-in-section">
+
+                  <div className="logged-in-heading">
+
+                    <div>
+
+                      <span className="eyebrow">ACCOUNT MONITORING</span>
+
+                      <h2>Logged-in Accounts</h2>
+
+                      <p>
+
+                        Accounts with recent activity in the last 90 seconds.
+
+                      </p>
+
+                    </div>
+
+                    <IonBadge color="success">
+
+                      {loginSessions.length} Online
+
+                    </IonBadge>
+
+                  </div>
+
+                  {sessionsError && (
+
+                    <IonText color="danger">
+
+                      <p role="alert">
+
+                        Could not retrieve sessions: {sessionsError}
+
+                      </p>
+
+                    </IonText>
+
+                  )}
+
+                  {sessionsLoading && loginSessions.length === 0 ? (
+
+                    <div className="sessions-loading">
+
+                      <IonSpinner name="crescent" />
+
+                      <span>Loading logged-in accounts...</span>
+
+                    </div>
+
+                  ) : (
+
+                    <div className="sessions-table-wrap">
+
+                      <table className="sessions-table">
+
+                        <thead>
+
+                          <tr>
+
+                            <th>Account</th>
+
+                            <th>School ID</th>
+
+                            <th>Course</th>
+
+                            <th>Email</th>
+
+                            <th>Role</th>
+
+                            <th>Status</th>
+
+                            <th>Last Activity</th>
+
+                          </tr>
+
+                        </thead>
+
+                        <tbody>
+
+                          {loginSessions.length === 0 ? (
+
+                            <tr>
+
+                              <td colSpan={7} className="sessions-empty">
+
+                                {sessionsError
+
+                                  ? 'Could not load the account list.'
+
+                                  : 'There are no active sessions right now.'}
+
+                              </td>
+
+                            </tr>
+
+                          ) : (
+
+                            loginSessions.map((session) => {
+                              const account = accounts.find((item) => item.id === session.user_id);
+                              return (
+                                <tr key={`${session.user_id}-${session.login_at}`}>
+                                  <td><strong>{session.full_name}</strong></td>
+                                  <td>{account?.student_id?.trim() || '—'}</td>
+                                  <td>{account?.course?.trim() || '—'}</td>
+                                  <td>{session.email}</td>
+                                  <td>
+                                    <IonBadge color={session.role.toLowerCase() === 'admin' ? 'warning' : 'medium'}>
+                                      {session.role}
+                                    </IonBadge>
+                                  </td>
+                                  <td>
+                                    <span className="session-online">
+                                      <span className="session-online-dot" />
+                                      {session.status}
+                                    </span>
+                                  </td>
+                                  <td>{formatPhilippineTime(session.last_seen)}</td>
+                                </tr>
+                              );
+                            })
+
+                          )}
+
+                        </tbody>
+
+                      </table>
+
+                    </div>
+
+                  )}
+
+                </section>
+
+              )}
+
+              {borrowRequestConfirmation && (
+                <div
+                  role="presentation"
+                  onClick={() => setBorrowRequestConfirmation(null)}
+                  style={{ position: 'fixed', inset: 0, zIndex: 10000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px', background: 'rgba(15, 23, 42, 0.62)', backdropFilter: 'blur(4px)' }}
+                >
+                  <section
+                    role="dialog"
+                    aria-modal="true"
+                    aria-labelledby="borrow-request-title"
+                    onClick={(event) => event.stopPropagation()}
+                    style={{ width: '100%', maxWidth: '430px', background: 'var(--ion-card-background, #ffffff)', color: 'var(--ion-text-color, #172033)', borderRadius: '20px', padding: '28px', boxShadow: '0 24px 70px rgba(0,0,0,0.28)' }}
+                  >
+                    <h2 id="borrow-request-title" style={{ textAlign: 'center', margin: '0 0 12px', fontSize: '22px' }}>Confirm Borrowing</h2>
+                    <p style={{ textAlign: 'center', margin: '0 0 12px', lineHeight: 1.55 }}>
+                      Do you want to borrow <strong>“{borrowRequestConfirmation.title}”</strong> by {borrowRequestConfirmation.author}?
+                    </p>
+                    <p style={{ textAlign: 'center', margin: '0 0 22px', lineHeight: 1.55, opacity: 0.78 }}>
+                      If you confirm, your request will be sent to the admin. The admin will set your return due date.
+                    </p>
+                    <div style={{ display: 'flex', gap: '10px' }}>
+                      <IonButton expand="block" fill="outline" color="medium" style={{ flex: 1, margin: 0 }} onClick={() => setBorrowRequestConfirmation(null)} disabled={loading}>
+                        Cancel
+                      </IonButton>
+                      <IonButton expand="block" style={{ flex: 1, margin: 0, '--background': '#e8c15a', '--background-hover': '#d8ad43', '--color': '#17283f', '--box-shadow': '0 5px 13px rgba(191,148,49,.22)' } as React.CSSProperties} disabled={loading} onClick={() => {
+                        const book = borrowRequestConfirmation;
+                        if (book) void submitBorrowRequest(book);
+                      }}>
+                        {loading ? 'Processing…' : 'Borrow'}
+                      </IonButton>
+                    </div>
+                  </section>
+                </div>
+              )}
+
+              {pickupConfirmation && (
+                <div
+                  role="presentation"
+                  onClick={() => setPickupConfirmation(null)}
+                  style={{
+                    position: 'fixed', inset: 0, zIndex: 10000,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    padding: '20px', background: 'rgba(15, 32, 52, 0.68)',
+                    backdropFilter: 'blur(6px)',
+                  }}
+                >
+                  <section
+                    role="dialog"
+                    aria-modal="true"
+                    aria-labelledby="pickup-modal-title"
+                    onClick={(event) => event.stopPropagation()}
+                    style={{
+                      width: '100%', maxWidth: '430px', background: 'var(--ion-card-background, #ffffff)',
+                      color: '#203047', borderRadius: '20px',
+                      padding: '28px', border: '1px solid #e3e9ef', borderTop: '5px solid #e7c15b', boxShadow: '0 24px 70px rgba(18,39,63,0.28)',
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '16px' }}>
+                      <div style={{
+                        width: '64px', height: '64px', borderRadius: '50%',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        background: 'rgba(232, 193, 90, 0.22)', color: '#17283f', fontSize: '30px', border: '1px solid rgba(195,155,62,.25)',
+                      }} aria-hidden="true">✓</div>
+                    </div>
+                    <h2 id="pickup-modal-title" style={{ textAlign: 'center', margin: '0 0 8px', fontSize: '22px' }}>
+                      Confirm Book Pickup
+                    </h2>
+                    <p style={{ textAlign: 'center', margin: '0 0 20px', lineHeight: 1.55, opacity: 0.78 }}>
+                      Please confirm that the student has arrived at the library and has received the book.
+                    </p>
+                    <label htmlFor="admin-approval-due-date" style={{ display: 'block', fontWeight: 600, marginBottom: '8px' }}>
+                      Return Due Date
+                    </label>
+                    <input
+                      id="admin-approval-due-date"
+                      type="date"
+                      min={(() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; })()}
+                      max={(() => { const d = new Date(); d.setDate(d.getDate() + 7); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; })()}
+                      value={approvalDueDate}
+                      onChange={(event) => setApprovalDueDate(event.target.value)}
+                      style={{ width: '100%', boxSizing: 'border-box', padding: '12px', marginBottom: '18px', border: '1px solid var(--ion-color-medium, #92949c)', borderRadius: '10px', background: 'var(--ion-background-color, #fff)', color: 'var(--ion-text-color, #172033)', font: 'inherit' }}
+                    />
+                    <div style={{
+                      padding: '14px 16px', borderRadius: '12px', marginBottom: '22px',
+                      background: 'var(--ion-color-light, #f4f6f9)', lineHeight: 1.5,
+                    }}>
+                      <div style={{ fontSize: '11px', fontWeight: 700, letterSpacing: '0.08em', opacity: 0.65, marginBottom: '5px' }}>
+                        IMPORTANT
+                      </div>
+                      Confirming will mark this request as borrowed and update the available book copies.
+                    </div>
+                    <div style={{ display: 'flex', gap: '10px' }}>
+                      <IonButton
+                        expand="block"
+                        fill="outline"
+                        color="medium"
+                        style={{ flex: 1, margin: 0 }}
+                        onClick={() => setPickupConfirmation(null)}
+                        disabled={loading}
+                      >
+                        Cancel
+                      </IonButton>
+                      <IonButton
+                        expand="block"
+                        style={{ flex: 1, margin: 0, '--background': '#e8c15a', '--background-hover': '#d8ad43', '--color': '#17283f', '--box-shadow': '0 5px 13px rgba(191,148,49,.22)' } as React.CSSProperties}
+                        onClick={() => {
+                          const record = pickupConfirmation;
+                          if (record) void approveBorrowing(record, approvalDueDate);
+                          setPickupConfirmation(null);
+                        }}
+                        disabled={loading}
+                      >
+                        {loading ? 'Processing…' : 'Confirm Pickup'}
+                      </IonButton>
+                    </div>
+                  </section>
+                </div>
+              )}
+
+              {returnConfirmation && (
+                <div role="presentation" onClick={() => setReturnConfirmation(null)} style={{
+                  position: 'fixed', inset: 0, zIndex: 10001, display: 'flex', alignItems: 'center',
+                  justifyContent: 'center', padding: '20px', background: 'rgba(15, 32, 52, 0.68)',
+                  backdropFilter: 'blur(6px)',
+                }}>
+                  <section role="dialog" aria-modal="true" aria-labelledby="return-modal-title"
+                    onClick={(event) => event.stopPropagation()} style={{
+                      width: '100%', maxWidth: '430px', background: 'var(--ion-card-background, #ffffff)',
+                      color: '#203047', borderRadius: '20px', padding: '28px', border: '1px solid #e3e9ef', borderTop: '5px solid #e7c15b',
+                      boxShadow: '0 24px 70px rgba(18,39,63,0.28)',
+                    }}>
+                    <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '16px' }}>
+                      <div style={{ width: '64px', height: '64px', borderRadius: '50%', display: 'flex',
+                        alignItems: 'center', justifyContent: 'center', background: 'rgba(232, 193, 90, 0.22)',
+                        color: '#17283f', fontSize: '30px', border: '1px solid rgba(195,155,62,.25)' }} aria-hidden="true">✓</div>
+                    </div>
+                    <h2 id="return-modal-title" style={{ textAlign: 'center', margin: '0 0 8px', fontSize: '22px' }}>Confirm Book Return</h2>
+                    <p style={{ textAlign: 'center', margin: '0 0 20px', lineHeight: 1.55, opacity: 0.78 }}>
+                      Has the student physically returned this book to the library?
+                    </p>
+                    <div style={{ padding: '14px 16px', borderRadius: '12px', marginBottom: '22px',
+                      background: 'var(--ion-color-light, #f4f6f9)', lineHeight: 1.5 }}>
+                      <div style={{ fontSize: '11px', fontWeight: 700, letterSpacing: '0.08em', opacity: 0.65, marginBottom: '5px' }}>IMPORTANT</div>
+                      Confirming will mark this loan as returned and increase the available book copies.
+                    </div>
+                    <div style={{ display: 'flex', gap: '10px' }}>
+                      <IonButton expand="block" fill="outline" color="medium" style={{ flex: 1, margin: 0 }}
+                        onClick={() => setReturnConfirmation(null)} disabled={loading}>Cancel</IonButton>
+                      <IonButton expand="block" style={{ flex: 1, margin: 0, '--background': '#e8c15a', '--background-hover': '#d8ad43', '--color': '#17283f', '--box-shadow': '0 5px 13px rgba(191,148,49,.22)' } as React.CSSProperties} disabled={loading}
+                        onClick={() => { const record = returnConfirmation; setReturnConfirmation(null); if (record) void returnBorrowing(record); }}>
+                        {loading ? 'Processing…' : 'Confirm Return'}
+                      </IonButton>
+                    </div>
+                  </section>
+                </div>
+              )}
+
+                  {selectedBook && (
+                    <div
+                      role="dialog"
+                      aria-modal="true"
+                      aria-labelledby="book-about-title"
+                      style={{ position: 'fixed', inset: 0, zIndex: 10000, background: 'rgba(15, 23, 42, 0.68)', display: 'grid', placeItems: 'center', padding: '20px', overflowY: 'auto' }}
+                      onClick={(event) => {
+                        if (event.target === event.currentTarget) setSelectedBook(null);
+                      }}
+                    >
+                      <section style={{ position: 'relative', width: 'min(100%, 620px)', maxHeight: '90vh', overflowY: 'auto', background: 'var(--ion-background-color, #fff)', color: 'var(--ion-text-color, #222)', borderRadius: '20px', padding: '28px', boxShadow: '0 24px 80px rgba(0,0,0,.28)' }}>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedBook(null)}
+                          aria-label="Close book details"
+                          style={{ position: 'absolute', right: '16px', top: '10px', border: 0, background: 'transparent', fontSize: '30px', cursor: 'pointer', color: 'inherit' }}
+                        >
+                          ×
+                        </button>
+                        <div
+                          className="book-cover-detail-frame"
+                          style={{ boxShadow: '0 10px 26px rgba(15, 35, 55, .18)' }}
+                        >
+                          <BookCover
+                            book={selectedBook}
+                            index={selectedBook.id}
+                            className="book-cover book-cover-detail"
+                          />
+                        </div>
+                        <span className="eyebrow">ABOUT THIS BOOK</span>
+                        <h2 id="book-about-title">{selectedBook.title}</h2>
+                        <p style={{ color: '#8a6b35', marginTop: '4px' }}><AuthorDisplay book={selectedBook} prefix="by " /></p>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', margin: '18px 0' }}>
+                          <span style={{ background: '#f3ead8', color: '#5f4722', borderRadius: '999px', padding: '6px 12px' }}>{displayCategoryName(selectedBook.category || 'General')}</span>
+                          {selectedBook.call_number && <span>Call No.: {selectedBook.call_number}</span>}
+                        </div>
+                        <h3>About This Book</h3>
+                        <BookAbout book={selectedBook} />
+                        <p style={{ marginTop: '20px', fontWeight: 600 }}>
+                          {selectedBook.available_copies > 0
+                            ? `${selectedBook.available_copies} of ${selectedBook.total_copies} copies are currently available.`
+                            : 'This book is currently unavailable.'}
+                        </p>
+                        <IonButton
+                          expand="block"
+                          onClick={() => {
+                            setSelectedBook(null);
+                            if (!isAdmin) navigate('categories');
+                          }}
+                        >
+                          {isAdmin ? 'Back to Catalog' : 'Back to Categories'}
+                        </IonButton>
+                      </section>
+                    </div>
+                  )}
 
               {page === 'borrowings' && !isAdmin && (
                 <section className="quick-section admin-borrowing-section">
@@ -4416,6 +8567,49 @@ function App() {
                       </table>
                     </div>
                   )}
+                </section>
+              )}
+
+
+
+              {page === 'lostBooks' && isAdmin && (
+                <section className="quick-section admin-borrowing-section" style={{ marginTop: 22 }}>
+                  <div className="section-heading">
+                    <div>
+                      <span className="eyebrow">NEUST LIBRARY POLICY · SECTION 8.6</span>
+                      <h2>Lost &amp; Damaged Books</h2>
+                      <p>Track reported books, payment or replacement deadlines, and unsettled borrower accounts.</p>
+                    </div>
+                    <IonBadge color="warning">{lostBookCases.filter((item) => item.resolution_status === 'unsettled').length} unsettled</IonBadge>
+                  </div>
+                  {lostCasesLoading ? <div className="loading-row"><IonSpinner name="crescent" /><span>Loading cases...</span></div> :
+                    lostBookCases.length === 0 ? <p className="empty-state">No lost or damaged book cases have been reported.</p> :
+                    <div className="admin-table-wrap">
+                      <table className="admin-book-table">
+                        <thead><tr><th>Borrower / Book</th><th>Case</th><th>Amount Due</th><th>Deadline</th><th>Status / Action</th></tr></thead>
+                        <tbody>
+                          {lostBookCases.map((item) => {
+                            const borrower = accounts.find((account) => account.id === item.user_id);
+                            const book = books.find((entry) => entry.id === item.book_id);
+                            return <tr key={item.id}>
+                              <td><strong>{borrower?.full_name || `User #${item.user_id}`}</strong><small>{book?.title || `Book #${item.book_id}`}</small></td>
+                              <td>{item.case_type.toUpperCase()}<small>Reported: {item.report_date}</small></td>
+                              <td><strong>₱{item.amount_due.toFixed(2)}</strong><small>Book ₱{item.market_value.toFixed(2)} + ₱{item.processing_fee.toFixed(2)} fee</small></td>
+                              <td>{item.deadline}</td>
+                              <td>
+                                <IonBadge color={item.resolution_status === 'unsettled' ? 'danger' : 'success'}>{item.resolution_status.toUpperCase()}</IonBadge>
+                                {item.resolution_status === 'unsettled' ? <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 7 }}>
+                                  <IonButton size="small" color="success" disabled={loading} onClick={() => openResolveLostBookCase(item, 'paid')}>Mark Paid</IonButton>
+                                  <IonButton size="small" color="tertiary" disabled={loading} onClick={() => openResolveLostBookCase(item, 'replaced')}>Mark Replaced</IonButton>
+                                </div> : <div style={{ marginTop: 7 }}>
+                                  <IonButton size="small" fill="outline" color="primary" onClick={() => setReceiptPreviewCase(item)}>View Receipt</IonButton>
+                                </div>}
+                              </td>
+                            </tr>;
+                          })}
+                        </tbody>
+                      </table>
+                    </div>}
                 </section>
               )}
 
@@ -4481,7 +8675,7 @@ function App() {
 
                                     <td>
                                       <div className="borrowing-status-actions">
-                                        <IonBadge className="borrowing-status-badge" color={record.status === 'returned' ? 'success' : record.status === 'pending' ? 'tertiary' : record.overdue ? 'danger' : 'warning'}>
+                                        <IonBadge className="borrowing-status-badge" color={record.status === 'returned' ? 'success' : record.status === 'pending' ? 'tertiary' : record.status === 'lost' ? 'danger' : record.overdue ? 'danger' : 'warning'}>
                                           {record.overdue ? 'OVERDUE' : record.status === 'pending' ? 'Pending approval' : record.status}
                                         </IonBadge>
                                         {record.status === 'pending' && (
@@ -4493,6 +8687,12 @@ function App() {
                                           <IonButton size="small" color="success" className="borrowing-action-button" disabled={loading} onClick={() => setReturnConfirmation(record)}>
                                             Return Book
                                           </IonButton>
+                                        )}
+                                        {record.status === 'borrowed' && (
+                                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                                            <IonButton size="small" color="danger" fill="outline" disabled={loading} onClick={() => void reportLostBook(record, 'lost')}>Report Lost</IonButton>
+                                            <IonButton size="small" color="warning" fill="outline" disabled={loading} onClick={() => void reportLostBook(record, 'damaged')}>Report Damaged</IonButton>
+                                          </div>
                                         )}
                                       </div>
                                     </td>
@@ -4516,6 +8716,8 @@ function App() {
                 </>
 
               )}
+
+
 
               {/* BOOK CATEGORIES */}
 
@@ -4695,7 +8897,15 @@ function App() {
                                   <span className={book.available_copies > 0 ? 'book-available' : 'book-unavailable'}>
                                     {book.available_copies} available
                                   </span>
-                                  <span className="book-total">{book.total_copies} total</span>
+                                  <button
+                                    type="button"
+                                    onClick={() => toggleSavedBook(book.id)}
+                                    aria-label={savedBookIds.includes(book.id) ? 'Remove from saved books' : 'Add to saved books'}
+                                    title={savedBookIds.includes(book.id) ? 'Remove from saved books' : 'Add to saved books'}
+                                    style={{ width:28, height:28, padding:0, border:0, background:'transparent', color:savedBookIds.includes(book.id) ? '#d49a16' : '#8795a7', fontSize:21, lineHeight:1, cursor:'pointer' }}
+                                  >
+                                    {savedBookIds.includes(book.id) ? '★' : '☆'}
+                                  </button>
                                 </div>
                                 <div className="book-card-actions">
                                   <IonButton
@@ -4709,7 +8919,7 @@ function App() {
                                   <IonButton
                                     expand="block"
                                     className="borrow-book-button"
-                                    disabled={isPhilippineWeekend() || !book.available || book.available_copies < 1 || loading}
+                                    disabled={!isBorrowingScheduleOpenNow() || !book.available || book.available_copies < 1 || loading}
                                     onClick={() => void borrowBook(book)}
                                   >
                                     {loading ? 'Processing...' : book.available && book.available_copies > 0 ? 'Request' : 'Unavailable'}
@@ -5170,7 +9380,7 @@ function App() {
 
               {/* ALL REGISTERED ACCOUNTS */}
 
-              {page === 'accounts' && isAdmin && (
+              {false && page === 'accounts' && isAdmin && (
 
                 <section className="logged-in-section">
 
@@ -5276,7 +9486,7 @@ function App() {
 
                                   <strong>{account.full_name}</strong>
 
-                                  <small>{account.username ? `@${account.username}` : account.role === 'admin' ? 'Administrator' : 'Student account'}</small>
+                                  <small>{account.username ? `@${account.username}` : account.role === 'admin' ? 'Administrator' : account.role?.toLowerCase() === 'faculty' ? 'Faculty account' : 'Student account'}</small>
 
                                 </td>
 
@@ -5389,7 +9599,7 @@ function App() {
 
               {/* ACTIVE LOGIN SESSIONS */}
 
-              {page === 'sessions' && isAdmin && (
+              {false && page === 'sessions' && isAdmin && (
 
                 <section className="logged-in-section">
 
@@ -5598,12 +9808,13 @@ function App() {
                       Please confirm that the student has arrived at the library and has received the book.
                     </p>
                     <label htmlFor="admin-approval-due-date" style={{ display: 'block', fontWeight: 600, marginBottom: '8px' }}>
-                      Return Due Date (set by Admin)
+                      Return Due Date
                     </label>
                     <input
                       id="admin-approval-due-date"
                       type="date"
-                      min={new Date().toISOString().slice(0, 10)}
+                      min={(() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; })()}
+                      max={(() => { const d = new Date(); d.setDate(d.getDate() + 7); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; })()}
                       value={approvalDueDate}
                       onChange={(event) => setApprovalDueDate(event.target.value)}
                       style={{ width: '100%', boxSizing: 'border-box', padding: '12px', marginBottom: '18px', border: '1px solid var(--ion-color-medium, #92949c)', borderRadius: '10px', background: 'var(--ion-background-color, #fff)', color: 'var(--ion-text-color, #172033)', font: 'inherit' }}
@@ -5683,6 +9894,143 @@ function App() {
                 </div>
               )}
 
+              {receiptPreviewCase && (
+                <div role="presentation" onClick={() => setReceiptPreviewCase(null)} style={{ position:'fixed', inset:0, zIndex:14000, display:'grid', placeItems:'center', padding:16, background:'rgba(7,24,43,.72)', backdropFilter:'blur(5px)' }}>
+                  <section role="dialog" aria-modal="true" aria-labelledby="case-receipt-title" onClick={event=>event.stopPropagation()} style={{ width:'min(100%,460px)', maxHeight:'90vh', overflowY:'auto', background:'#fff', color:'#172b45', borderRadius:18, padding:22, boxShadow:'0 24px 70px rgba(10,30,52,.35)' }}>
+                    <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:12, marginBottom:16 }}>
+                      <div>
+                        <div style={{ color:'#b18425', fontSize:10, fontWeight:800, letterSpacing:'.12em' }}>NEUST PEÑARANDA OFF-CAMPUS</div>
+                        <h2 id="case-receipt-title" style={{ margin:'4px 0 0', fontSize:21, fontWeight:850 }}>
+                          {receiptPreviewCase.resolution_status === 'paid' ? 'Payment Receipt' : 'Book Replacement Receipt'}
+                        </h2>
+                      </div>
+                      <button type="button" onClick={()=>setReceiptPreviewCase(null)} aria-label="Close receipt preview" style={{ border:0, borderRadius:10, width:38, height:38, background:'#eef2f7', color:'#243b55', fontSize:22, cursor:'pointer' }}>×</button>
+                    </div>
+                    <div style={{ textAlign:'center', padding:'16px 10px', borderTop:'1px dashed #cbd5e1', borderBottom:'1px dashed #cbd5e1', marginBottom:14 }}>
+                      <div style={{ width:52, height:52, borderRadius:'50%', display:'grid', placeItems:'center', margin:'0 auto 9px', background:'#e7f7ed', color:'#16834b', fontSize:27, fontWeight:800 }}>✓</div>
+                      <div style={{ color:'#16834b', fontWeight:800, fontSize:17 }}>
+                        {receiptPreviewCase.resolution_status === 'paid' ? 'PAYMENT RECORDED' : 'REPLACEMENT RECEIVED'}
+                      </div>
+                      <div style={{ color:'#718096', fontSize:12, marginTop:4 }}>Case #{receiptPreviewCase.id} · {receiptPreviewCase.resolved_at ? new Date(receiptPreviewCase.resolved_at).toLocaleString() : 'Resolution recorded'}</div>
+                    </div>
+                    <div style={{ display:'grid', gap:10, fontSize:14 }}>
+                      <div style={{ display:'flex', justifyContent:'space-between', gap:12 }}><span style={{ color:'#718096' }}>Case type</span><strong>{receiptPreviewCase.case_type.toUpperCase()}</strong></div>
+                      <div style={{ display:'flex', justifyContent:'space-between', gap:12 }}><span style={{ color:'#718096' }}>Case amount due</span><strong>₱{Number(receiptPreviewCase.amount_due || 0).toFixed(2)}</strong></div>
+                      {(receiptPreviewCase.resolution_note || '').split(' | ').filter(Boolean).map((entry, index) => {
+                        const separator = entry.indexOf(':');
+                        const label = separator >= 0 ? entry.slice(0, separator) : 'Details';
+                        const value = separator >= 0 ? entry.slice(separator + 1).trim() : entry;
+                        return <div key={`${index}-${label}`} style={{ display:'flex', justifyContent:'space-between', gap:12, borderTop:'1px solid #edf1f5', paddingTop:9 }}>
+                          <span style={{ color:'#718096' }}>{label}</span><strong style={{ textAlign:'right', maxWidth:'58%', overflowWrap:'anywhere' }}>{value}</strong>
+                        </div>;
+                      })}
+                    </div>
+                    {receiptPreviewCase.resolution_note?.includes('Receipt Attachment:') && (
+                      <button type="button" disabled={receiptAttachmentLoading} onClick={()=>void viewReceiptAttachment(receiptPreviewCase)} style={{ width:'100%', marginTop:14, padding:12, border:'1px solid #c7d8eb', borderRadius:10, background:'#f8fbff', color:'#174a78', fontWeight:750, cursor:'pointer' }}>
+                        {receiptAttachmentLoading ? 'Opening attachment...' : 'View Receipt Attachment'}
+                      </button>
+                    )}
+                    {receiptPreviewCase.resolution_note?.includes('Receipt Attachment:') && !receiptPreviewCase.resolution_note?.includes('Receipt Storage Key:') && (
+                      <div style={{ marginTop:10, padding:12, border:'1px solid #f2d39a', borderRadius:10, background:'#fffaf0' }}>
+                        <div style={{ color:'#925b08', fontSize:12, lineHeight:1.45, marginBottom:9 }}>
+                          This older record only saved the filename, not the actual image. Select the original receipt file again to securely save it and enable the preview.
+                        </div>
+                        <label style={{ display:'block', color:'#344b63', fontSize:12, fontWeight:750, marginBottom:7 }}>Upload receipt image or PDF</label>
+                        <input
+                          type="file"
+                          accept="image/jpeg,image/png,image/webp,application/pdf"
+                          disabled={receiptReuploadLoading}
+                          onChange={(event) => {
+                            const file = event.target.files?.[0];
+                            if (file) void reuploadReceiptAttachment(receiptPreviewCase, file);
+                            event.currentTarget.value = '';
+                          }}
+                          style={{ display:'block', width:'100%', fontSize:12 }}
+                        />
+                        {receiptReuploadLoading && <div style={{ marginTop:8, color:'#174a78', fontSize:12 }}>Uploading receipt securely...</div>}
+                      </div>
+                    )}
+                    {receiptAttachmentUrl && (
+                      <div style={{ marginTop:12, padding:10, border:'1px solid #dbe4ee', borderRadius:12, background:'#f8fafc' }}>
+                        {receiptAttachmentUrl && (receiptPreviewCase.resolution_note || '').match(/\.(pdf)\b/i) ? (
+                          <iframe title="Receipt attachment preview" src={receiptAttachmentUrl} style={{ width:'100%', height:420, border:0, borderRadius:8 }} />
+                        ) : (
+                          <img src={receiptAttachmentUrl} alt="Uploaded receipt attachment" style={{ display:'block', width:'100%', maxHeight:420, objectFit:'contain', borderRadius:8, background:'#fff' }} />
+                        )}
+                        <button type="button" onClick={()=>{ URL.revokeObjectURL(receiptAttachmentUrl); setReceiptAttachmentUrl(null); }} style={{ width:'100%', marginTop:8, padding:9, border:0, borderRadius:9, background:'#e8eef5', color:'#243b55', fontWeight:700, cursor:'pointer' }}>Close Attachment</button>
+                      </div>
+                    )}
+                    <div style={{ marginTop:18, padding:12, borderRadius:10, background:'#f0f6ff', color:'#315a8a', fontSize:12, lineHeight:1.45 }}>
+                      {receiptPreviewCase.resolution_status === 'paid'
+                        ? 'This is a LibTrack payment record preview. Keep the original official GCash, bank, or cash receipt as proof of payment.'
+                        : 'This is a LibTrack replacement acknowledgment. Keep the original library record for verification.'}
+                    </div>
+                    <button type="button" onClick={()=>setReceiptPreviewCase(null)} style={{ width:'100%', marginTop:16, padding:12, border:0, borderRadius:10, background:'#173b59', color:'#fff', fontWeight:750, cursor:'pointer' }}>Close Preview</button>
+                  </section>
+                </div>
+              )}
+
+              {lostBookDialog && (
+                <div role="presentation" onClick={() => !loading && setLostBookDialog(null)} style={{ position:'fixed', inset:0, zIndex:13000, display:'grid', placeItems:'center', padding:20, background:'rgba(7,24,43,.68)', backdropFilter:'blur(5px)' }}>
+                  <section role="dialog" aria-modal="true" aria-labelledby="lost-book-dialog-title" onClick={(event)=>event.stopPropagation()} style={{ width:'min(100%,500px)', maxHeight:'90vh', overflowY:'auto', background:'var(--ion-card-background,#fff)', color:'var(--ion-text-color,#18324d)', borderRadius:20, padding:26, border:'1px solid #dce5ef', borderTop:'5px solid #e8c15a', boxShadow:'0 24px 70px rgba(10,30,52,.32)' }}>
+                    <div style={{ display:'flex', alignItems:'center', gap:12, marginBottom:8 }}>
+                      <div style={{ width:46, height:46, flex:'0 0 46px', borderRadius:14, display:'grid', placeItems:'center', background:'#fff5dc', fontSize:23 }}>📚</div>
+                      <div><div style={{ color:'#b18425', fontSize:10, fontWeight:800, letterSpacing:'.12em' }}>NEUST LIBRARY POLICY · SECTION 8.6</div>
+                        <h2 id="lost-book-dialog-title" style={{ margin:'3px 0 0', fontSize:21, fontWeight:800 }}>{lostBookDialog.mode==='report' ? `Report ${lostBookDialog.caseType==='damaged'?'Damaged':'Lost'} Book` : `Confirm Case ${lostBookDialog.resolution==='paid'?'Payment':'Replacement'}`}</h2></div>
+                    </div>
+                    <p style={{ margin:'0 0 20px', color:'var(--ion-color-medium,#718096)', lineHeight:1.5, fontSize:13 }}>
+                      {lostBookDialog.mode==='report' ? 'Enter the book value and any additional fine to record this case.' : `Add an optional receipt or reference note before marking case #${lostBookDialog.item?.id} as ${lostBookDialog.resolution}.`}
+                    </p>
+                    {lostBookDialog.mode==='report' && <div style={{ display:'grid', gap:14 }}>
+                      <label style={{ display:'grid', gap:6, fontSize:13, fontWeight:700 }}>Current market value (PHP)
+                        <input type="number" min="0" step="0.01" value={lostBookMarketValue} onChange={e=>setLostBookMarketValue(e.target.value)} style={{ width:'100%', boxSizing:'border-box', padding:'13px 14px', borderRadius:10, border:'1px solid #cbd7e4', background:'var(--ion-background-color,#f7f9fc)', color:'inherit', font:'inherit' }} /></label>
+                      <label style={{ display:'grid', gap:6, fontSize:13, fontWeight:700 }}>Additional fine (PHP)
+                        <input type="number" min="0" step="0.01" value={lostBookAdditionalFine} onChange={e=>setLostBookAdditionalFine(e.target.value)} style={{ width:'100%', boxSizing:'border-box', padding:'13px 14px', borderRadius:10, border:'1px solid #cbd7e4', background:'var(--ion-background-color,#f7f9fc)', color:'inherit', font:'inherit' }} />
+                        <small style={{ color:'var(--ion-color-medium,#718096)', fontWeight:400 }}>Total charges are capped at book value plus PHP 50.</small></label>
+                    </div>}
+                    {lostBookDialog.mode === 'report' ? (
+                      <label style={{ display:'grid', gap:6, marginTop:14, fontSize:13, fontWeight:700 }}>Notes (optional)
+                        <textarea rows={3} value={lostBookNote} onChange={e=>setLostBookNote(e.target.value)} placeholder="Enter a note..." style={{ width:'100%', boxSizing:'border-box', resize:'vertical', padding:'12px 14px', borderRadius:10, border:'1px solid #cbd7e4', background:'var(--ion-background-color,#f7f9fc)', color:'inherit', font:'inherit' }} /></label>
+                    ) : (
+                      <div style={{ display:'grid', gap:12, marginTop:14 }}>
+                        <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(180px,1fr))', gap:12 }}>
+                          <label style={{ display:'grid', gap:6, fontSize:13, fontWeight:700 }}>Receipt Number (optional)
+                            <input value={lostBookReceiptNumber} onChange={e=>setLostBookReceiptNumber(e.target.value)} placeholder="e.g. OR-2026-001" style={{ width:'100%', boxSizing:'border-box', padding:'12px', borderRadius:10, border:'1px solid #cbd7e4', background:'var(--ion-background-color,#f7f9fc)', color:'inherit', font:'inherit' }} /></label>
+                          {lostBookDialog.resolution === 'paid' ? <>
+                            <label style={{ display:'grid', gap:6, fontSize:13, fontWeight:700 }}>Amount Paid (PHP) *
+                              <input type="number" min="0.01" step="0.01" value={lostBookAmountPaid} onChange={e=>setLostBookAmountPaid(e.target.value)} placeholder="Enter amount paid" style={{ width:'100%', boxSizing:'border-box', padding:'12px', borderRadius:10, border:'1px solid #cbd7e4', background:'var(--ion-background-color,#f7f9fc)', color:'inherit', font:'inherit' }} /></label>
+                            <label style={{ display:'grid', gap:6, fontSize:13, fontWeight:700 }}>Payment Date *
+                              <input type="date" value={lostBookPaymentDate} onChange={e=>setLostBookPaymentDate(e.target.value)} style={{ width:'100%', boxSizing:'border-box', padding:'12px', borderRadius:10, border:'1px solid #cbd7e4', background:'var(--ion-background-color,#f7f9fc)', color:'inherit', font:'inherit' }} /></label>
+                            <label style={{ display:'grid', gap:6, fontSize:13, fontWeight:700 }}>Payment Method *
+                              <select value={lostBookPaymentMethod} onChange={e=>setLostBookPaymentMethod(e.target.value)} style={{ width:'100%', boxSizing:'border-box', padding:'12px', borderRadius:10, border:'1px solid #cbd7e4', background:'var(--ion-background-color,#f7f9fc)', color:'inherit', font:'inherit' }}>
+                                <option>Cash</option><option>GCash</option><option>Bank Transfer</option><option>Other</option>
+                              </select></label>
+                          </> : <>
+                            <label style={{ display:'grid', gap:6, fontSize:13, fontWeight:700 }}>Replacement Book Title *
+                              <input value={lostBookReplacementTitle} onChange={e=>setLostBookReplacementTitle(e.target.value)} placeholder="Enter replacement book title" style={{ width:'100%', boxSizing:'border-box', padding:'12px', borderRadius:10, border:'1px solid #cbd7e4', background:'var(--ion-background-color,#f7f9fc)', color:'inherit', font:'inherit' }} /></label>
+                            <label style={{ display:'grid', gap:6, fontSize:13, fontWeight:700 }}>Date Received *
+                              <input type="date" value={lostBookReplacementDate} onChange={e=>setLostBookReplacementDate(e.target.value)} style={{ width:'100%', boxSizing:'border-box', padding:'12px', borderRadius:10, border:'1px solid #cbd7e4', background:'var(--ion-background-color,#f7f9fc)', color:'inherit', font:'inherit' }} /></label>
+                            <label style={{ display:'grid', gap:6, fontSize:13, fontWeight:700 }}>Received / Checked By
+                              <input value={lostBookReceivedBy} onChange={e=>setLostBookReceivedBy(e.target.value)} placeholder="Librarian name" style={{ width:'100%', boxSizing:'border-box', padding:'12px', borderRadius:10, border:'1px solid #cbd7e4', background:'var(--ion-background-color,#f7f9fc)', color:'inherit', font:'inherit' }} /></label>
+                          </>}
+                        </div>
+                        <label style={{ display:'grid', gap:6, fontSize:13, fontWeight:700 }}>Upload Receipt (image or PDF, optional)
+                          <input type="file" accept="image/*,application/pdf" onChange={e=>setLostBookReceiptFile(e.target.files?.[0] || null)} style={{ width:'100%', boxSizing:'border-box', padding:'10px', borderRadius:10, border:'1px solid #cbd7e4', background:'var(--ion-background-color,#f7f9fc)', color:'inherit', font:'inherit' }} />
+                          {lostBookReceiptFile && <><small style={{ color:'#52708c', fontWeight:500 }}>Selected: {lostBookReceiptFile.name}</small>{lostBookReceiptFile.type.startsWith('image/') && <img src={URL.createObjectURL(lostBookReceiptFile)} alt="Selected receipt preview" style={{ width:'100%', maxHeight:180, objectFit:'contain', borderRadius:10, border:'1px solid #dbe4ee', background:'#fff' }} />}</>}
+                        </label>
+                        <label style={{ display:'grid', gap:6, fontSize:13, fontWeight:700 }}>Other Notes (optional)
+                          <textarea rows={3} value={lostBookNote} onChange={e=>setLostBookNote(e.target.value)} placeholder="Enter a note..." style={{ width:'100%', boxSizing:'border-box', resize:'vertical', padding:'12px 14px', borderRadius:10, border:'1px solid #cbd7e4', background:'var(--ion-background-color,#f7f9fc)', color:'inherit', font:'inherit' }} /></label>
+                        <small style={{ color:'#718096', lineHeight:1.45 }}>The selected receipt file will be securely uploaded to the private receipt-attachments bucket. Only the case owner and Admin can view it.</small>
+                      </div>
+                    )}
+                    <div style={{ display:'flex', gap:10, marginTop:22 }}>
+                      <IonButton expand="block" fill="outline" color="medium" style={{ flex:1, margin:0 }} disabled={loading} onClick={()=>setLostBookDialog(null)}>Cancel</IonButton>
+                      <IonButton expand="block" style={{ flex:1, margin:0, '--background':'#173b59', '--background-hover':'#244e70', '--color':'#fff' } as React.CSSProperties} disabled={loading} onClick={()=>void submitLostBookDialog()}>{loading?'Saving...':lostBookDialog.mode==='report'?'Save Report':'Confirm'}</IonButton>
+                    </div>
+                  </section>
+                </div>
+              )}
+
                   {selectedBook && (
                     <div
                       role="dialog"
@@ -5742,11 +10090,32 @@ function App() {
               {!userLoading && user && (
                 <nav className="libtrack-mobile-bottom-nav" aria-label="Mobile navigation">
                   <button type="button" className={page === 'home' ? 'active' : ''} onClick={() => navigateFromBottom('home')}><span>⌂</span><span>Home</span></button>
-                  <button type="button" className={page === 'categories' ? 'active' : ''} onClick={() => navigateFromBottom('categories')}><span>▦</span><span>Categories</span></button>
+                  <button type="button" className={(isAdmin ? page === 'borrowings' : page === 'categories') ? 'active' : ''} onClick={() => navigateFromBottom(isAdmin ? 'borrowings' : 'categories')}><span>{isAdmin ? '⇄' : '▦'}</span><span>{isAdmin ? 'Catalog' : 'Categories'}</span></button>
                   <button type="button" className={page === 'research' ? 'active' : ''} onClick={() => navigateFromBottom('research')}><span>▤</span><span>Research</span></button>
                   <button type="button" className={page === 'ebooks' ? 'active' : ''} onClick={() => { setSelectedEbook(null); navigateFromBottom('ebooks'); void loadEbooks(); }}><span>▣</span><span>E-Books</span></button>
-                  <button type="button" className={page === 'borrowings' ? 'active' : ''} onClick={() => navigateFromBottom('borrowings')}><span>◷</span><span>History</span></button>
+                  <button type="button" className={page === 'settings' ? 'active' : ''} onClick={() => navigateFromBottom('settings')}><span>⚙</span><span>Settings</span></button>
                 </nav>
+              )}
+
+              {profilePhotoPreview && (
+                <div role="dialog" aria-modal="true" aria-label="Profile photo preview" onClick={() => setProfilePhotoPreview(null)} style={{ position: 'fixed', inset: 0, zIndex: 12000, display: 'grid', placeItems: 'center', padding: 24, background: 'rgba(3, 12, 24, .86)' }}>
+                  <button type="button" aria-label="Close photo preview" onClick={() => setProfilePhotoPreview(null)} style={{ position: 'absolute', top: 20, right: 24, width: 42, height: 42, borderRadius: '50%', border: '1px solid rgba(255,255,255,.45)', background: 'rgba(255,255,255,.12)', color: '#fff', fontSize: 26, cursor: 'pointer' }}>×</button>
+                  <div onClick={(event) => event.stopPropagation()} style={{ maxWidth: 'min(92vw, 760px)', maxHeight: '88vh', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}>
+                    <img src={profilePhotoPreview.url} alt={`${profilePhotoPreview.name} enlarged`} style={{ display: 'block', maxWidth: '100%', maxHeight: '78vh', objectFit: 'contain', borderRadius: 14, boxShadow: '0 18px 60px rgba(0,0,0,.45)' }} />
+                    <span style={{ color: '#fff', fontWeight: 700, textAlign: 'center' }}>{profilePhotoPreview.name}</span>
+                  </div>
+                </div>
+              )}
+
+              {showWeekendNoticePopup && isStudent && (
+                <div role="dialog" aria-modal="true" aria-labelledby="weekend-notice-title" style={{ position: 'fixed', inset: 0, zIndex: 10000, display: 'grid', placeItems: 'center', padding: '20px', background: 'rgba(5, 20, 38, .62)' }}>
+                  <section style={{ width: 'min(100%, 440px)', padding: '26px', borderRadius: '20px', background: '#fff', boxShadow: '0 20px 60px rgba(0,0,0,.25)', textAlign: 'center' }}>
+                    <div style={{ fontSize: '38px', marginBottom: '8px' }}>🗓️</div>
+                    <h2 id="weekend-notice-title" style={{ margin: '0 0 10px', color: '#09284a', fontSize: '22px' }}>Weekend Borrowing Notice</h2>
+                    <p style={{ margin: '0 0 20px', color: '#526b86', lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>{weekendNoticeMessage}</p>
+                    <IonButton expand="block" onClick={() => setShowWeekendNoticePopup(false)}>Got it</IonButton>
+                  </section>
+                </div>
               )}
 
               <footer className="dashboard-footer">
@@ -5757,11 +10126,6 @@ function App() {
 
                 </span>
 
-                <button type="button" onClick={() => navigate('categories')}>
-
-                  ▦ Categories
-
-                </button>
 
               </footer>
 
