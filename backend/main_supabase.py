@@ -799,6 +799,9 @@ def save_profile_photo(user: User, data_url: str):
     try:
         storage_upload(BUCKET_PROFILE_PHOTOS, key, contents, mime_type)
         public_url = supabase.storage.from_(BUCKET_PROFILE_PHOTOS).get_public_url(key)
+
+        # Add a unique version to prevent the browser from showing a cached old photo.
+        public_url = f"{public_url}?v={time.time_ns()}"
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Could not save profile photo: {exc}")
     user.profile_photo_url = str(public_url)
