@@ -1,7 +1,10 @@
 from datetime import datetime, date, timedelta
+from zoneinfo import ZoneInfo
+import time
 import os
 import re
 import secrets
+import random
 import uuid
 import json
 import zipfile
@@ -26,8 +29,8 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field, ConfigDict
 
 from sqlalchemy import (
-    create_engine, String, Integer, Date, DateTime, Text,
-    ForeignKey, Boolean, select, inspect, text,
+    create_engine, String, Integer, Float, Date, DateTime, Text,
+    ForeignKey, Boolean, select, inspect, text, func,
 )
 from sqlalchemy.orm import (
     DeclarativeBase, Mapped, mapped_column,
@@ -72,9 +75,20 @@ supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY) if SUPABASE_EN
 BUCKET_EBOOKS = "ebooks"
 BUCKET_COVERS = "book-covers"
 BUCKET_RESEARCH = "research-pdfs"
+BUCKET_PROFILE_PHOTOS = "profile-photos"
+BUCKET_RECEIPTS = "receipt-attachments"
+MAX_RECEIPT_BYTES = 5 * 1024 * 1024
+ALLOWED_RECEIPT_TYPES = {"image/jpeg", "image/png", "image/webp", "application/pdf"}
 
 # Cache e-book storage paths to avoid rescanning Supabase for every PDF request.
 EBOOK_KEY_CACHE = {}
+EBOOK_LIST_CACHE = {"created_at": 0.0, "items": None}
+EBOOK_LIST_CACHE_TTL = 30.0  # seconds; keeps repeat catalog opens fast
+
+
+def invalidate_ebook_list_cache():
+    EBOOK_LIST_CACHE["created_at"] = 0.0
+    EBOOK_LIST_CACHE["items"] = None
 
 
 def storage_upload(bucket: str, key: str, contents: bytes, content_type: str):
@@ -148,7 +162,8 @@ if not SECRET_KEY or len(SECRET_KEY) < 32:
     )
 
 ALGORITHM = "HS256"
-ACCESS_TOKEN_MINUTES = 60
+# Persistent sign-in window: users stay signed in for up to 30 days unless they log out.
+ACCESS_TOKEN_MINUTES = 60 * 24 * 30
 
 password_hashing = PasswordHash.recommended()
 bearer_scheme = HTTPBearer(auto_error=False)
@@ -215,6 +230,12 @@ class User(Base):
     username: Mapped[Optional[str]] = mapped_column(
         String(50), unique=True, nullable=True, index=True
     )
+    profile_photo_url: Mapped[Optional[str]] = mapped_column(
+        String(1000), nullable=True
+    )
+    borrowing_suspended: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
 
 class LoginSession(Base):
     __tablename__ = "login_sessions"
@@ -280,6 +301,7 @@ class Research(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     title: Mapped[str] = mapped_column(String(300), index=True)
     authors: Mapped[str] = mapped_column(String(300), default="Not listed")
+    teacher: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)
     year: Mapped[str] = mapped_column(String(30), default="Not specified")
     course: Mapped[str] = mapped_column(String(100), index=True)
     subject: Mapped[str] = mapped_column(String(150), default="General")
@@ -289,8 +311,57 @@ class Research(Base):
     campus: Mapped[str] = mapped_column(String(150), default="NEUST Peñaranda Off-Campus")
     url: Mapped[str] = mapped_column(String(1000), default="")
     pdf_filename: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    cover_image: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     note: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+class AcademicCourse(Base):
+    __tablename__ = "academic_courses"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    code: Mapped[str] = mapped_column(String(40), unique=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class AcademicCourseCreate(BaseModel):
+    code: str = Field(min_length=2, max_length=40)
+
+
+class SystemSetting(Base):
+    __tablename__ = "system_settings"
+
+    key: Mapped[str] = mapped_column(String(100), primary_key=True)
+    value: Mapped[str] = mapped_column(Text, default="")
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class WeekendNoticeUpdate(BaseModel):
+    enabled: bool = True
+    time: str = Field(default="07:00", pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    message: str = Field(default="Book borrowing is unavailable on Saturdays and Sundays. Please visit the library during regular operating days (Monday-Friday).", min_length=1, max_length=1000)
+
+
+class BorrowingScheduleUpdate(BaseModel):
+    enabled: bool = True
+    days: list[str] = Field(default_factory=lambda: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"])
+    open_time: str = "08:00"
+    close_time: str = "17:00"
+    message: str = Field(default="Book borrowing is currently unavailable. Please check the library borrowing schedule.", max_length=500)
+
+
+DEFAULT_BORROWING_SCHEDULE = {
+    "enabled": True,
+    "days": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"],
+    "open_time": "08:00",
+    "close_time": "17:00",
+    "message": "Book borrowing is currently unavailable. Please check the library borrowing schedule.",
+}
+VALID_BORROWING_DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+
+
+class LibraryScheduleUpdate(BaseModel):
+    schedule: dict[str, dict[str, str | bool]]
+
 
 class Borrowing(Base):
     __tablename__ = "borrowings"
@@ -315,6 +386,64 @@ class Borrowing(Base):
         String(20), default="borrowed"
     )
 
+class ProblemReport(Base):
+    __tablename__ = "problem_reports"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    category: Mapped[str] = mapped_column(String(100))
+    description: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(20), default="pending")
+    admin_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class LostBookCase(Base):
+    __tablename__ = "lost_book_cases"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    borrowing_id: Mapped[int] = mapped_column(ForeignKey("borrowings.id"), unique=True, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    book_id: Mapped[int] = mapped_column(ForeignKey("books.id"), index=True)
+    report_date: Mapped[date] = mapped_column(Date, default=date.today)
+    market_value: Mapped[float] = mapped_column(Float, default=0)
+    processing_fee: Mapped[float] = mapped_column(Float, default=50)
+    additional_fine: Mapped[float] = mapped_column(Float, default=0)
+    amount_due: Mapped[float] = mapped_column(Float, default=50)
+    deadline: Mapped[date] = mapped_column(Date)
+    case_type: Mapped[str] = mapped_column(String(20), default="lost")
+    resolution_status: Mapped[str] = mapped_column(String(20), default="unsettled")
+    resolution_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class UserNotification(Base):
+    __tablename__ = "user_notifications"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    title: Mapped[str] = mapped_column(String(180))
+    message: Mapped[str] = mapped_column(Text)
+    notification_type: Mapped[str] = mapped_column(String(40), default="library")
+    is_read: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class LostBookReport(BaseModel):
+    market_value: float = Field(ge=0, le=1000000)
+    additional_fine: float = Field(default=0, ge=0, le=1000000)
+    case_type: str = Field(default="lost", pattern=r"^(lost|damaged)$")
+    deadline: Optional[date] = None
+    note: Optional[str] = Field(default=None, max_length=1000)
+
+
+class LostBookResolution(BaseModel):
+    resolution_status: str = Field(pattern=r"^(paid|replaced|waived)$")
+    note: Optional[str] = Field(default=None, max_length=1000)
+
+
 # =========================================================
 # DATABASE INITIALIZATION AND SAFE MIGRATION
 # =========================================================
@@ -334,6 +463,8 @@ def migrate_database():
         "year": "VARCHAR(30)",
         "section": "VARCHAR(50)",
         "username": "VARCHAR(50)",
+        "profile_photo_url": "VARCHAR(1000)",
+        "borrowing_suspended": "BOOLEAN NOT NULL DEFAULT 0",
     }
 
     with engine.begin() as connection:
@@ -361,7 +492,7 @@ def migrate_database():
 
         # Safe additive migration: preserve all existing research records.
         research_columns = {column["name"] for column in inspect(connection).get_columns("research_materials")}
-        for column_name, column_type in {"research_type": "VARCHAR(80) DEFAULT 'Research Paper'", "abstract": "TEXT", "verification_status": "VARCHAR(40) DEFAULT 'Unverified'"}.items():
+        for column_name, column_type in {"research_type": "VARCHAR(80) DEFAULT 'Research Paper'", "abstract": "TEXT", "verification_status": "VARCHAR(40) DEFAULT 'Unverified'", "teacher": "VARCHAR(300)"}.items():
             if column_name not in research_columns:
                 connection.execute(text(f"ALTER TABLE research_materials ADD COLUMN {column_name} {column_type}"))
 
@@ -375,6 +506,10 @@ def migrate_database():
                     "ALTER TABLE research_materials "
                     "ADD COLUMN pdf_filename VARCHAR(255)"
                 )
+            )
+        if "cover_image" not in research_columns:
+            connection.execute(
+                text("ALTER TABLE research_materials ADD COLUMN cover_image VARCHAR(500)")
             )
 
         # Add the call_number column without removing or rewriting existing books.
@@ -419,16 +554,18 @@ if not SUPABASE_ENABLED:
 app.add_middleware(
     CORSMiddleware,
   allow_origins=[
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-    "https://libtrack-poc.vercel.app",
-    "https://localhost",
+     "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://192.168.100.44:5173",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "https://libtrack-poc.vercel.app",
+        # Capacitor Android WebView origin used by the installed APK.
+        "https://localhost",
     ],
     allow_credentials=False,
     allow_methods=[
-        "GET", "POST", "PATCH", "DELETE", "OPTIONS"
+        "GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"
     ],
     allow_headers=["Authorization", "Content-Type"],
 )
@@ -444,6 +581,7 @@ def get_db():
 # =========================================================
 
 class RegisterRequest(BaseModel):
+    profile_photo_data_url: Optional[str] = Field(default=None, max_length=4200000)
     full_name: str = Field(min_length=2, max_length=150)
     student_id: str = Field(min_length=1, max_length=50)
     course: str = Field(min_length=1, max_length=100)
@@ -452,6 +590,19 @@ class RegisterRequest(BaseModel):
     email: str = Field(min_length=3, max_length=255)
     username: str = Field(min_length=3, max_length=50)
     password: str = Field(min_length=10, max_length=128)
+
+class FacultyRegisterRequest(BaseModel):
+    full_name: str = Field(min_length=2, max_length=150)
+    email: str = Field(min_length=3, max_length=255)
+    username: str = Field(min_length=3, max_length=50)
+    password: str = Field(min_length=10, max_length=128)
+    profile_photo_data_url: Optional[str] = Field(default=None, max_length=4200000)
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(min_length=1, max_length=128)
+    new_password: str = Field(min_length=10, max_length=128)
+
 
 class LoginRequest(BaseModel):
     email: str = Field(min_length=3, max_length=255)
@@ -519,6 +670,7 @@ class ResearchCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     title: str = Field(min_length=1, max_length=300)
     authors: str = Field(default="Not listed", max_length=300)
+    teacher: Optional[str] = Field(default=None, max_length=300)
     year: str = Field(default="Not specified", max_length=30)
     course: str = Field(min_length=1, max_length=100)
     subject: str = Field(default="General", max_length=150)
@@ -533,6 +685,7 @@ class ResearchUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     title: Optional[str] = Field(default=None, min_length=1, max_length=300)
     authors: Optional[str] = Field(default=None, max_length=300)
+    teacher: Optional[str] = Field(default=None, max_length=300)
     year: Optional[str] = Field(default=None, max_length=30)
     course: Optional[str] = Field(default=None, min_length=1, max_length=100)
     subject: Optional[str] = Field(default=None, max_length=150)
@@ -552,6 +705,16 @@ class BorrowCreate(BaseModel):
 
 class BorrowApproval(BaseModel):
     due_date: date
+
+
+class ProblemReportCreate(BaseModel):
+    category: str = Field(min_length=2, max_length=100)
+    description: str = Field(min_length=5, max_length=2000)
+
+
+class ProblemReportUpdate(BaseModel):
+    status: str = Field(pattern=r"^(pending|in_progress|resolved)$")
+    admin_note: Optional[str] = Field(default=None, max_length=2000)
 
 # =========================================================
 # HELPER FUNCTIONS
@@ -614,7 +777,36 @@ def user_out(user: User):
         "email": user.email,
         "role": user.role,
         "active": user.active,
+        "profile_photo_url": user.profile_photo_url,
     }
+
+def save_profile_photo(user: User, data_url: str):
+    """Validate and store a small profile image in Supabase Storage."""
+    if not SUPABASE_ENABLED:
+        raise HTTPException(status_code=503, detail="Profile photo storage is not configured. Set Supabase Storage credentials.")
+    import base64
+    import binascii
+    match = re.fullmatch(r"data:(image/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=]+)", data_url or "")
+    if not match:
+        raise HTTPException(status_code=422, detail="Upload a JPG, PNG, or WEBP image.")
+    mime_type, encoded = match.groups()
+    try:
+        contents = base64.b64decode(encoded, validate=True)
+    except (binascii.Error, ValueError):
+        raise HTTPException(status_code=422, detail="Invalid image data.")
+    if not contents or len(contents) > 3 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Profile photo must be 3 MB or smaller.")
+    extension = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp"}[mime_type]
+    # Unique object keys prevent browsers from showing an older cached profile photo.
+    key = f"users/{user.id}/profile-{uuid.uuid4().hex}.{extension}"
+    try:
+        storage_upload(BUCKET_PROFILE_PHOTOS, key, contents, mime_type)
+        public_url = supabase.storage.from_(BUCKET_PROFILE_PHOTOS).get_public_url(key)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Could not save profile photo: {exc}")
+    user.profile_photo_url = str(public_url)
+    return user.profile_photo_url
+
 
 def book_out(book: Book):
     return {
@@ -635,6 +827,25 @@ def book_out(book: Book):
         "available": book.available_copies > 0,
         "is_active": book.is_active,
     }
+
+def lost_book_case_out(record: LostBookCase):
+    return {
+        "id": record.id,
+        "borrowing_id": record.borrowing_id,
+        "user_id": record.user_id,
+        "book_id": record.book_id,
+        "report_date": record.report_date.isoformat(),
+        "market_value": float(record.market_value or 0),
+        "processing_fee": float(record.processing_fee or 0),
+        "additional_fine": float(record.additional_fine or 0),
+        "amount_due": float(record.amount_due or 0),
+        "deadline": record.deadline.isoformat(),
+        "case_type": record.case_type,
+        "resolution_status": record.resolution_status,
+        "resolution_note": record.resolution_note,
+        "resolved_at": record.resolved_at.isoformat() if record.resolved_at else None,
+    }
+
 
 def borrowing_out(record: Borrowing):
     return {
@@ -707,8 +918,19 @@ def get_current_user(
         raise unauthorized
 
     user = db.get(User, user_id)
+    token_id = payload.get("jti")
 
-    if not user or not user.active:
+    if not user or not user.active or not token_id:
+        raise unauthorized
+
+    active_session = db.scalar(
+        select(LoginSession).where(
+            LoginSession.token_id == token_id,
+            LoginSession.user_id == user_id,
+            LoginSession.logged_out_at.is_(None),
+        )
+    )
+    if active_session is None:
         raise unauthorized
 
     return user
@@ -830,6 +1052,170 @@ def health():
         "timestamp": datetime.utcnow().isoformat(),
     }
 
+
+@app.get("/settings/weekend-notice")
+def get_weekend_notice_settings(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    rows = {item.key: item.value for item in db.scalars(
+        select(SystemSetting).where(SystemSetting.key.in_([
+            "weekend_notice_enabled", "weekend_notice_time", "weekend_notice_message"
+        ]))
+    ).all()}
+    return {
+        "enabled": rows.get("weekend_notice_enabled", "true").lower() == "true",
+        "time": rows.get("weekend_notice_time", "07:00"),
+        "message": rows.get("weekend_notice_message", "Book borrowing is unavailable on Saturdays and Sundays. Please visit the library during regular operating days (Monday-Friday)."),
+    }
+
+
+@app.put("/settings/weekend-notice")
+def update_weekend_notice_settings(
+    payload: WeekendNoticeUpdate,
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_admin),
+):
+    values = {
+        "weekend_notice_enabled": "true" if payload.enabled else "false",
+        "weekend_notice_time": payload.time,
+        "weekend_notice_message": payload.message.strip(),
+    }
+    for key, value in values.items():
+        item = db.get(SystemSetting, key)
+        if item:
+            item.value = value
+        else:
+            db.add(SystemSetting(key=key, value=value))
+    db.commit()
+    return {"enabled": payload.enabled, "time": payload.time, "message": payload.message.strip()}
+
+
+DEFAULT_LIBRARY_SCHEDULE = {
+    "Monday": {"closed": False, "open": "12:00", "close": "22:00"},
+    "Tuesday": {"closed": False, "open": "12:00", "close": "22:00"},
+    "Wednesday": {"closed": False, "open": "12:00", "close": "22:00"},
+    "Thursday": {"closed": False, "open": "12:00", "close": "22:00"},
+    "Friday": {"closed": False, "open": "12:00", "close": "22:00"},
+    "Saturday": {"closed": True, "open": "08:00", "close": "12:00"},
+    "Sunday": {"closed": True, "open": "08:00", "close": "12:00"},
+}
+
+@app.get("/settings/borrowing-schedule")
+def get_borrowing_schedule(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    item = db.get(SystemSetting, "borrowing_schedule")
+    if not item or not item.value:
+        return {"schedule": DEFAULT_BORROWING_SCHEDULE}
+    try:
+        saved = json.loads(item.value)
+        if not isinstance(saved, dict):
+            return {"schedule": DEFAULT_BORROWING_SCHEDULE}
+        return {"schedule": {**DEFAULT_BORROWING_SCHEDULE, **saved}}
+    except (TypeError, ValueError):
+        return {"schedule": DEFAULT_BORROWING_SCHEDULE}
+
+
+@app.put("/settings/borrowing-schedule")
+def update_borrowing_schedule(
+    payload: BorrowingScheduleUpdate,
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_admin),
+):
+    if not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", payload.open_time):
+        raise HTTPException(status_code=422, detail="Invalid borrowing opening time.")
+    if not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", payload.close_time):
+        raise HTTPException(status_code=422, detail="Invalid borrowing closing time.")
+    if payload.enabled and payload.close_time <= payload.open_time:
+        raise HTTPException(status_code=422, detail="Borrowing closing time must be later than opening time.")
+    if any(day not in VALID_BORROWING_DAYS for day in payload.days):
+        raise HTTPException(status_code=422, detail="Invalid borrowing day selected.")
+    clean = {
+        "enabled": payload.enabled,
+        "days": [day for day in VALID_BORROWING_DAYS if day in payload.days],
+        "open_time": payload.open_time,
+        "close_time": payload.close_time,
+        "message": payload.message.strip() or DEFAULT_BORROWING_SCHEDULE["message"],
+    }
+    item = db.get(SystemSetting, "borrowing_schedule")
+    encoded = json.dumps(clean, separators=(",", ":"))
+    if item:
+        item.value = encoded
+    else:
+        db.add(SystemSetting(key="borrowing_schedule", value=encoded))
+    db.commit()
+    return {"schedule": clean}
+
+
+def enforce_borrowing_schedule(db: Session):
+    item = db.get(SystemSetting, "borrowing_schedule")
+    schedule = DEFAULT_BORROWING_SCHEDULE.copy()
+    if item and item.value:
+        try:
+            saved = json.loads(item.value)
+            if isinstance(saved, dict):
+                schedule.update(saved)
+        except (TypeError, ValueError):
+            pass
+    now = datetime.now(ZoneInfo("Asia/Manila"))
+    day_name = now.strftime("%A")
+    current_time = now.strftime("%H:%M")
+    if (
+        not schedule.get("enabled", True)
+        or day_name not in schedule.get("days", DEFAULT_BORROWING_SCHEDULE["days"])
+        or current_time < str(schedule.get("open_time", "08:00"))
+        or current_time >= str(schedule.get("close_time", "17:00"))
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail=str(schedule.get("message") or DEFAULT_BORROWING_SCHEDULE["message"]),
+        )
+
+
+@app.get("/settings/library-schedule")
+def get_library_schedule(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    item = db.get(SystemSetting, "library_schedule")
+    if not item or not item.value:
+        return {"schedule": DEFAULT_LIBRARY_SCHEDULE}
+    try:
+        saved = json.loads(item.value)
+        return {"schedule": saved if isinstance(saved, dict) else DEFAULT_LIBRARY_SCHEDULE}
+    except (TypeError, ValueError):
+        return {"schedule": DEFAULT_LIBRARY_SCHEDULE}
+
+@app.put("/settings/library-schedule")
+def update_library_schedule(
+    payload: LibraryScheduleUpdate,
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_admin),
+):
+    days = list(DEFAULT_LIBRARY_SCHEDULE.keys())
+    clean = {}
+    for day in days:
+        value = payload.schedule.get(day, DEFAULT_LIBRARY_SCHEDULE[day])
+        is_closed = bool(value.get("closed", False))
+        opening = str(value.get("open", "08:00"))
+        closing = str(value.get("close", "17:00"))
+        for label, clock in (("opening", opening), ("closing", closing)):
+            if not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", clock):
+                raise HTTPException(status_code=422, detail=f"Invalid {label} time for {day}.")
+        if not is_closed and closing <= opening:
+            raise HTTPException(status_code=422, detail=f"Closing time must be later than opening time for {day}.")
+        clean[day] = {"closed": is_closed, "open": opening, "close": closing}
+    item = db.get(SystemSetting, "library_schedule")
+    encoded = json.dumps(clean, separators=(",", ":"))
+    if item:
+        item.value = encoded
+    else:
+        db.add(SystemSetting(key="library_schedule", value=encoded))
+    db.commit()
+    return {"schedule": clean}
+
 # =========================================================
 # STUDENT REGISTRATION AND LOGIN
 # =========================================================
@@ -902,10 +1288,72 @@ def register_student(
             ),
         )
 
+    if payload.profile_photo_data_url:
+        try:
+            save_profile_photo(user, payload.profile_photo_data_url)
+            db.commit()
+            db.refresh(user)
+        except Exception:
+            db.rollback()
+            # Account creation remains successful even if optional photo upload fails.
     return {
         "message": "Student account created successfully.",
         **user_out(user),
     }
+
+@app.post("/auth/profile-photo")
+def upload_my_profile_photo(
+    file: UploadFile = File(...),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    content_type = (file.content_type or "").lower()
+    if content_type not in {"image/jpeg", "image/png", "image/webp"}:
+        raise HTTPException(status_code=415, detail="Upload a JPG, PNG, or WEBP image.")
+    contents = file.file.read(3 * 1024 * 1024 + 1)
+    if not contents or len(contents) > 3 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Profile photo must be 3 MB or smaller.")
+    import base64
+    encoded = base64.b64encode(contents).decode("ascii")
+    url = save_profile_photo(user, f"data:{content_type};base64,{encoded}")
+    db.commit()
+    db.refresh(user)
+    return {"profile_photo_url": url}
+
+@app.post("/auth/register-faculty", status_code=201)
+def register_faculty(
+    payload: FacultyRegisterRequest,
+    db: Session = Depends(get_db),
+):
+    full_name = clean_required(payload.full_name, "Full name")
+    email = normalize_email(payload.email)
+    username = clean_required(payload.username, "Username").lower()
+    if any(character.isspace() for character in username):
+        raise HTTPException(status_code=422, detail="Username cannot contain spaces.")
+    if db.scalar(select(User).where(User.email == email)):
+        raise HTTPException(status_code=409, detail="Email already registered.")
+    if db.scalar(select(User).where(User.username == username)):
+        raise HTTPException(status_code=409, detail="Username already taken.")
+    user = User(
+        full_name=full_name, email=email, username=username,
+        role="faculty", active=True, password_hash=hash_password(payload.password),
+    )
+    try:
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+    except Exception:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Faculty registration could not be completed. Check whether your details already exist.")
+    if payload.profile_photo_data_url:
+        try:
+            save_profile_photo(user, payload.profile_photo_data_url)
+            db.commit()
+            db.refresh(user)
+        except Exception:
+            db.rollback()
+    return {"message": "Faculty account created successfully.", **user_out(user)}
+
 
 @app.post("/auth/login")
 def login(
@@ -957,6 +1405,7 @@ def login(
         "course": user.course,
         "year": user.year,
         "section": user.section,
+        "profile_photo_url": user.profile_photo_url,
     }
 
 @app.get("/auth/me")
@@ -964,6 +1413,71 @@ def my_account(
     user: User = Depends(get_current_user),
 ):
     return user_out(user)
+
+@app.post("/auth/change-password")
+def change_password(
+    payload: ChangePasswordRequest,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if credentials is None:
+        raise HTTPException(status_code=401, detail="Please log in.")
+
+    if not user.password_hash or not verify_password(
+        payload.current_password, user.password_hash
+    ):
+        raise HTTPException(status_code=400, detail="Current password is incorrect.")
+
+    if payload.current_password == payload.new_password:
+        raise HTTPException(
+            status_code=422,
+            detail="Choose a password different from your current password.",
+        )
+
+    try:
+        claims = jwt.decode(
+            credentials.credentials,
+            SECRET_KEY,
+            algorithms=[ALGORITHM],
+        )
+        current_token_id = claims.get("jti")
+    except InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid login session.")
+
+    if not current_token_id:
+        raise HTTPException(status_code=401, detail="Login session ID is missing.")
+
+    current_session = db.scalar(
+        select(LoginSession).where(
+            LoginSession.token_id == current_token_id,
+            LoginSession.user_id == user.id,
+            LoginSession.logged_out_at.is_(None),
+        )
+    )
+    if current_session is None:
+        raise HTTPException(status_code=401, detail="Login session is no longer active.")
+
+    user.password_hash = hash_password(payload.new_password)
+
+    # Sign out the user's other devices, but keep this current session active.
+    other_sessions = db.scalars(
+        select(LoginSession).where(
+            LoginSession.user_id == user.id,
+            LoginSession.logged_out_at.is_(None),
+            LoginSession.token_id != current_token_id,
+        )
+    ).all()
+    signed_out_at = datetime.utcnow()
+    for session in other_sessions:
+        session.logged_out_at = signed_out_at
+
+    db.commit()
+    return {
+        "message": "Password changed successfully.",
+        "other_sessions_signed_out": len(other_sessions),
+    }
+
 
 @app.post("/auth/heartbeat")
 def session_heartbeat(
@@ -1264,7 +1778,130 @@ def delete_user(
 # E-BOOK LIBRARY (LOCAL PDF UPLOAD; PUBLIC READ, ADMIN UPLOAD)
 # =========================================================
 
-def ebook_out_from_key(key: str, size: int = 0):
+
+
+def public_cover_url(key: Optional[str]) -> Optional[str]:
+    if not key:
+        return None
+    safe_key = Path(key).name
+    if supabase:
+        try:
+            return supabase.storage.from_(BUCKET_COVERS).get_public_url(key)
+        except Exception:
+            return None
+    return f"/uploads/book_covers/{safe_key}"
+
+
+def validate_cover_upload(file: UploadFile, contents: bytes):
+    allowed = {
+        "image/jpeg": ".jpg",
+        "image/png": ".png",
+        "image/webp": ".webp",
+    }
+    content_type = (file.content_type or "").lower()
+    if content_type not in allowed:
+        raise HTTPException(status_code=415, detail="Cover must be JPG, PNG, or WEBP.")
+    if not contents or len(contents) > MAX_BOOK_COVER_BYTES:
+        raise HTTPException(status_code=413, detail="Cover is empty or exceeds the 5 MB limit.")
+    signatures = {
+        "image/jpeg": contents.startswith(b"\xff\xd8\xff"),
+        "image/png": contents.startswith(b"\x89PNG\r\n\x1a\n"),
+        "image/webp": len(contents) >= 12 and contents[:4] == b"RIFF" and contents[8:12] == b"WEBP",
+    }
+    if not signatures[content_type]:
+        raise HTTPException(status_code=415, detail="The selected file is not a valid image.")
+    return allowed[content_type]
+
+
+
+# =========================================================
+# COURSE COLLECTION COVERS (RESEARCH + E-BOOK LIBRARY)
+# =========================================================
+
+def normalize_collection_code(course_code: str) -> str:
+    code = re.sub(r"\s+", " ", (course_code or "").strip()).upper()
+    if not code or not re.fullmatch(r"[A-Z0-9][A-Z0-9 _-]{0,39}", code):
+        raise HTTPException(status_code=400, detail="Invalid course code.")
+    return code
+
+
+def collection_cover_prefix(collection: str) -> str:
+    return f"collection-covers/{collection}/"
+
+
+def list_collection_cover_urls(collection: str):
+    prefix = collection_cover_prefix(collection)
+    covers = {}
+    if supabase:
+        try:
+            keys = storage_walk(BUCKET_COVERS, prefix.rstrip("/"))
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="Could not load collection photos from storage.") from exc
+        for key in keys:
+            filename = Path(key).name
+            code = Path(filename).stem.upper()
+            if code:
+                covers[code] = public_cover_url(key)
+    else:
+        for path in BOOK_COVER_DIR.glob(f"collection-{collection}-*.*"):
+            code = path.stem[len(f"collection-{collection}-"):].upper()
+            if code:
+                covers[code] = f"/uploads/book_covers/{path.name}"
+    return covers
+
+
+async def save_collection_cover(collection: str, course_code: str, file: UploadFile, admin: User):
+    code = normalize_collection_code(course_code)
+    contents = await file.read()
+    extension = validate_cover_upload(file, contents)
+    filename = f"{code}{extension}"
+    content_type = file.content_type or "image/jpeg"
+    if supabase:
+        key = f"{collection_cover_prefix(collection)}{filename}"
+        try:
+            storage_upload(BUCKET_COVERS, key, contents, content_type)
+            cover_url = public_cover_url(key)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail="Could not save the collection photo to storage.") from exc
+    else:
+        # Keep one active extension per course so replacing a photo cannot leave stale variants.
+        for old_extension in (".jpg", ".png", ".webp"):
+            (BOOK_COVER_DIR / f"collection-{collection}-{code}{old_extension}").unlink(missing_ok=True)
+        target = BOOK_COVER_DIR / f"collection-{collection}-{filename}"
+        target.write_bytes(contents)
+        cover_url = f"/uploads/book_covers/{target.name}"
+    return {"course": code, "cover_url": cover_url}
+
+
+@app.get("/research/collection-covers")
+def get_research_collection_covers():
+    return list_collection_cover_urls("research")
+
+
+@app.post("/research/collection-covers/{course_code}", status_code=200)
+async def upload_research_collection_cover(
+    course_code: str,
+    file: UploadFile = File(...),
+    admin: User = Depends(require_admin),
+):
+    return await save_collection_cover("research", course_code, file, admin)
+
+
+@app.get("/ebooks/collection-covers")
+def get_ebook_collection_covers():
+    return list_collection_cover_urls("ebooks")
+
+
+@app.post("/ebooks/collection-covers/{course_code}", status_code=200)
+async def upload_ebook_collection_cover(
+    course_code: str,
+    file: UploadFile = File(...),
+    admin: User = Depends(require_admin),
+):
+    return await save_collection_cover("ebooks", course_code, file, admin)
+
+
+def ebook_out_from_key(key: str, size: int = 0, cover_exists: bool = False):
     parts = key.split("/")
     stored_name = parts[-1]
     original_name = stored_name.split("__", 1)[-1] if "__" in stored_name else stored_name
@@ -1273,11 +1910,23 @@ def ebook_out_from_key(key: str, size: int = 0):
     year = relative_parts[1] if len(relative_parts) > 1 else ""
     semester = relative_parts[2] if len(relative_parts) > 2 else ""
     subject = relative_parts[3] if len(relative_parts) > 3 else (relative_parts[-1] if len(relative_parts) > 1 else "General")
+
+    # Do not call Storage.info() for every PDF. The catalog endpoint checks
+    # the covers bucket once and passes this boolean into the serializer.
+    cover_key = f"ebook-covers/{stored_name}"
+    cover_url = public_cover_url(cover_key) if cover_exists and supabase else None
+    if not supabase:
+        for suffix in (".jpg", ".png", ".webp"):
+            candidate = BOOK_COVER_DIR / f"ebook-{stored_name}{suffix}"
+            if candidate.is_file():
+                cover_url = f"/uploads/book_covers/{candidate.name}"
+                break
+
     return {
         "id": stored_name, "title": Path(original_name).stem, "file_name": original_name,
         "author": "Author not listed", "category": course, "course": course,
         "year": year, "semester": semester, "subject": subject,
-        "folder_path": "/".join(relative_parts), "description": "", "thumbnail_url": "",
+        "folder_path": "/".join(relative_parts), "description": "", "thumbnail_url": cover_url,
         "preview_url": f"/ebooks/{stored_name}/pdf", "size": str(size),
     }
 
@@ -1288,12 +1937,10 @@ def ebook_out(path: Path):
 
 def find_ebook_key(stored_name: str):
     if supabase:
-        # The /ebooks endpoint fills this cache when the catalog is loaded.
         cached_key = EBOOK_KEY_CACHE.get(stored_name)
         if cached_key:
             return cached_key
 
-        # Fallback for a direct PDF URL that was opened before the catalog loaded.
         matches = [
             key
             for key in storage_walk(BUCKET_EBOOKS)
@@ -1310,26 +1957,32 @@ def find_ebook_key(stored_name: str):
 
 @app.get("/ebooks")
 def list_ebooks():
-    """List PDFs from Supabase Storage, with local fallback for development."""
+    """List e-books with a short server cache and no per-file Storage.info calls."""
+    now = time.monotonic()
+    cached_items = EBOOK_LIST_CACHE.get("items")
+    if cached_items is not None and now - EBOOK_LIST_CACHE["created_at"] < EBOOK_LIST_CACHE_TTL:
+        return cached_items
+
     if supabase:
         keys = storage_walk(BUCKET_EBOOKS)
-        result = []
+        # One recursive listing of the cover bucket replaces one info() call
+        # per e-book. Missing covers simply use the frontend's normal fallback.
+        try:
+            cover_keys = set(storage_walk(BUCKET_COVERS))
+        except Exception:
+            cover_keys = set()
 
+        result = []
         for key in keys:
             stored_name = key.rsplit("/", 1)[-1]
             EBOOK_KEY_CACHE[stored_name] = key
-
-            try:
-                meta = supabase.storage.from_(BUCKET_EBOOKS).info(key)
-                size = (
-                    (meta or {}).get("metadata", {}).get("size", 0)
-                    if isinstance(meta, dict)
-                    else 0
+            result.append(
+                ebook_out_from_key(
+                    key,
+                    0,
+                    f"ebook-covers/{stored_name}" in cover_keys,
                 )
-            except Exception:
-                size = 0
-
-            result.append(ebook_out_from_key(key, size))
+            )
     else:
         files = [
             p for p in EBOOK_PDF_DIR.rglob("*.pdf")
@@ -1337,7 +1990,10 @@ def list_ebooks():
         ]
         result = [ebook_out(p) for p in files]
 
-    return sorted(result, key=lambda item: item["title"].casefold())
+    result = sorted(result, key=lambda item: item["title"].casefold())
+    EBOOK_LIST_CACHE["items"] = result
+    EBOOK_LIST_CACHE["created_at"] = time.monotonic()
+    return result
 
 
 @app.post("/ebooks", status_code=201)
@@ -1345,6 +2001,7 @@ async def upload_ebook(
     file: UploadFile = File(...), category: str = Form(default="General"),
     course: str = Form(default=""), year: str = Form(default=""),
     semester: str = Form(default=""), subject: str = Form(default=""),
+    cover: Optional[UploadFile] = File(default=None),
     admin: User = Depends(require_admin),
 ):
     incoming_name = (file.filename or "").replace("\\", "/").rsplit("/", 1)[-1]
@@ -1360,6 +2017,14 @@ async def upload_ebook(
         raise HTTPException(status_code=413, detail="PDF is too large. Maximum size is 50 MB.")
     if not contents.startswith(b"%PDF-"):
         raise HTTPException(status_code=415, detail="The file does not appear to be a valid PDF.")
+    cover_contents = None
+    cover_extension = None
+    if cover is not None and cover.filename:
+        try:
+            cover_contents = await cover.read(MAX_BOOK_COVER_BYTES + 1)
+        finally:
+            await cover.close()
+        cover_extension = validate_cover_upload(cover, cover_contents)
     def safe_part(value, fallback):
         cleaned = re.sub(r"[^A-Za-z0-9 _-]", "", (value or fallback)).strip()[:60]
         return cleaned or fallback
@@ -1383,6 +2048,13 @@ async def upload_ebook(
 
     if supabase:
         EBOOK_KEY_CACHE[stored] = key
+    invalidate_ebook_list_cache()
+
+    if cover_contents is not None and cover_extension:
+        if supabase:
+            storage_upload(BUCKET_COVERS, f"ebook-covers/{stored}", cover_contents, cover.content_type or "image/jpeg")
+        else:
+            (BOOK_COVER_DIR / f"ebook-{stored}{cover_extension}").write_bytes(cover_contents)
 
     return ebook_out_from_key(key, len(contents))
 
@@ -1442,6 +2114,34 @@ async def import_ebook_zip(file: UploadFile = File(...), admin: User = Depends(r
         await file.close()
 
 
+@app.post("/ebooks/{ebook_id}/cover", status_code=200)
+async def upload_ebook_cover(ebook_id: str, file: UploadFile = File(...), admin: User = Depends(require_admin)):
+    safe_id = Path(ebook_id).name
+    if safe_id != ebook_id or not safe_id.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Invalid e-book ID.")
+    match = find_ebook_key(safe_id)
+    if not match:
+        raise HTTPException(status_code=404, detail="E-book PDF not found.")
+    try:
+        contents = await file.read(MAX_BOOK_COVER_BYTES + 1)
+    finally:
+        await file.close()
+    extension = validate_cover_upload(file, contents)
+    if supabase:
+        cover_key = f"ebook-covers/{safe_id}"
+        # Keep a stable key so replacing a cover does not change the PDF record.
+        storage_upload(BUCKET_COVERS, cover_key, contents, file.content_type or "image/jpeg")
+        cover_url = public_cover_url(cover_key)
+    else:
+        cover_name = f"ebook-{safe_id}{extension}"
+        for suffix in (".jpg", ".png", ".webp"):
+            (BOOK_COVER_DIR / f"ebook-{safe_id}{suffix}").unlink(missing_ok=True)
+        (BOOK_COVER_DIR / cover_name).write_bytes(contents)
+        cover_url = f"/uploads/book_covers/{cover_name}"
+    invalidate_ebook_list_cache()
+    return {"id": safe_id, "thumbnail_url": cover_url}
+
+
 @app.delete("/ebooks/{ebook_id}")
 def delete_ebook(ebook_id: str, admin: User = Depends(require_admin)):
     safe_id = Path(ebook_id).name
@@ -1459,6 +2159,13 @@ def delete_ebook(ebook_id: str, admin: User = Depends(require_admin)):
         raise HTTPException(status_code=500, detail="Could not delete the e-book PDF.") from exc
 
     EBOOK_KEY_CACHE.pop(safe_id, None)
+    invalidate_ebook_list_cache()
+    if supabase:
+        try: storage_remove(BUCKET_COVERS, f"ebook-covers/{safe_id}")
+        except Exception: pass
+    else:
+        for suffix in (".jpg", ".png", ".webp"):
+            (BOOK_COVER_DIR / f"ebook-{safe_id}{suffix}").unlink(missing_ok=True)
 
     return {"message": "E-book deleted successfully.", "id": safe_id}
 
@@ -1485,6 +2192,7 @@ def research_out(item: Research):
         "id": item.id,
         "title": item.title,
         "authors": item.authors,
+        "teacher": item.teacher,
         "year": item.year,
         "course": item.course,
         "subject": item.subject,
@@ -1496,7 +2204,56 @@ def research_out(item: Research):
         "note": item.note,
         "has_pdf": bool(item.pdf_filename),
         "pdf_url": f"/research/{item.id}/pdf" if item.pdf_filename else None,
+        "cover_image": public_cover_url(item.cover_image),
     }
+
+@app.get("/courses")
+def list_academic_courses(db: Session = Depends(get_db)):
+    """Return admin-added courses; built-in courses remain in the frontend."""
+    return [item.code for item in db.scalars(select(AcademicCourse).order_by(AcademicCourse.code)).all()]
+
+
+@app.post("/courses", status_code=201)
+def create_academic_course(
+    payload: AcademicCourseCreate,
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_admin),
+):
+    code = re.sub(r"\s+", " ", payload.code.strip()).upper()
+    if not code:
+        raise HTTPException(status_code=422, detail="Course name cannot be empty.")
+    existing = db.scalar(select(AcademicCourse).where(AcademicCourse.code.ilike(code)))
+    if code in {"BSIT", "BSBA", "BSED"} or existing:
+        raise HTTPException(status_code=409, detail="This course already exists.")
+    item = AcademicCourse(code=code)
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+    return {"id": item.id, "code": item.code}
+
+
+@app.delete("/courses/{course_code}")
+def delete_academic_course(course_code: str, db: Session = Depends(get_db), admin: User = Depends(require_admin)):
+    item = db.scalar(select(AcademicCourse).where(AcademicCourse.code.ilike(course_code.strip())))
+    if not item:
+        raise HTTPException(status_code=404, detail="Course not found.")
+    code = item.code
+    has_research = db.scalar(select(Research.id).where(Research.course.ilike(code)).limit(1)) is not None
+    has_users = db.scalar(select(User.id).where(User.course.ilike(code)).limit(1)) is not None
+    ebook_prefix_exists = False
+    try:
+        if supabase:
+            ebook_prefix_exists = any(key == code or key.startswith(f"{code}/") for key in storage_walk(BUCKET_EBOOKS))
+        else:
+            ebook_prefix_exists = (EBOOK_PDF_DIR / code).exists()
+    except Exception:
+        raise HTTPException(status_code=503, detail="Could not verify whether this course still has e-books. Try again.")
+    if has_research or has_users or ebook_prefix_exists:
+        raise HTTPException(status_code=409, detail="This course cannot be deleted because it is still assigned to users, research, or e-books. Move those records to another course first.")
+    db.delete(item)
+    db.commit()
+    return {"message": "Course deleted successfully.", "code": code}
+
 
 @app.get("/research")
 def list_research(
@@ -1575,6 +2332,45 @@ def update_research(
     db.refresh(item)
     return research_out(item)
 
+@app.post("/research/{research_id}/cover", status_code=200)
+async def upload_research_cover(research_id: int, file: UploadFile = File(...), db: Session = Depends(get_db), admin: User = Depends(require_admin)):
+    item = db.get(Research, research_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Research not found.")
+    try:
+        contents = await file.read(MAX_BOOK_COVER_BYTES + 1)
+    finally:
+        await file.close()
+    extension = validate_cover_upload(file, contents)
+    stored = f"research-{research_id}-{uuid.uuid4().hex}{extension}"
+    previous = item.cover_image
+    try:
+        if supabase:
+            storage_upload(BUCKET_COVERS, f"research-covers/{stored}", contents, file.content_type or "image/jpeg")
+            item.cover_image = f"research-covers/{stored}"
+        else:
+            target = BOOK_COVER_DIR / stored
+            target.write_bytes(contents)
+            item.cover_image = stored
+        db.commit()
+        db.refresh(item)
+    except Exception as exc:
+        db.rollback()
+        if supabase:
+            try: storage_remove(BUCKET_COVERS, f"research-covers/{stored}")
+            except Exception: pass
+        else:
+            (BOOK_COVER_DIR / stored).unlink(missing_ok=True)
+        raise HTTPException(status_code=500, detail="Could not save the research cover.") from exc
+    if previous:
+        if supabase:
+            try: storage_remove(BUCKET_COVERS, previous)
+            except Exception: pass
+        else:
+            (BOOK_COVER_DIR / Path(previous).name).unlink(missing_ok=True)
+    return research_out(item)
+
+
 @app.post("/research/{research_id}/pdf", status_code=200)
 async def upload_research_pdf(research_id: int, file: UploadFile = File(...), db: Session = Depends(get_db), admin: User = Depends(require_admin)):
     item = db.get(Research, research_id)
@@ -1635,7 +2431,14 @@ def delete_research(research_id: int, db: Session = Depends(get_db), admin: User
     if not item:
         raise HTTPException(status_code=404, detail="Research not found.")
     filename = item.pdf_filename
+    cover_filename = item.cover_image
     db.delete(item); db.commit()
+    if cover_filename:
+        if supabase:
+            try: storage_remove(BUCKET_COVERS, cover_filename)
+            except Exception: pass
+        else:
+            (BOOK_COVER_DIR / Path(cover_filename).name).unlink(missing_ok=True)
     if filename:
         if supabase:
             try: storage_remove(BUCKET_RESEARCH, Path(filename).name)
@@ -1717,6 +2520,87 @@ def list_books(
         for book in books
         if has_real_book_author(book.author)
     ]
+
+@app.get("/reports/most-borrowed")
+def most_borrowed_books(
+    limit: int = 6,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Return books ranked by completed/approved borrowing transactions.
+
+    Pending requests are excluded so the ranking reflects books that were
+    actually approved and borrowed. Returned transactions remain in the
+    count because they represent a completed borrowing.
+    """
+    safe_limit = max(1, min(limit, 12))
+    rows = db.execute(
+        select(
+            Book,
+            func.count(Borrowing.id).label("borrow_count"),
+        )
+        .join(Borrowing, Borrowing.book_id == Book.id)
+        .where(
+            Book.is_active.is_(True),
+            Borrowing.status.in_(("borrowed", "returned")),
+        )
+        .group_by(Book.id)
+        .order_by(
+            func.count(Borrowing.id).desc(),
+            Book.title.asc(),
+        )
+        .limit(safe_limit)
+    ).all()
+
+    return [
+        {
+            **book_out(book),
+            "borrow_count": int(borrow_count),
+        }
+        for book, borrow_count in rows
+    ]
+
+
+@app.get("/reports/most-borrowing-students")
+def most_borrowing_students(
+    limit: int = 10,
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_admin),
+):
+    """Rank active student accounts by approved borrowing transactions."""
+    safe_limit = max(1, min(limit, 25))
+    rows = db.execute(
+        select(
+            User,
+            func.count(Borrowing.id).label("borrow_count"),
+        )
+        .join(Borrowing, Borrowing.user_id == User.id)
+        .where(
+            User.role == "student",
+            User.active.is_(True),
+            Borrowing.status.in_(("borrowed", "returned")),
+        )
+        .group_by(User.id)
+        .order_by(
+            func.count(Borrowing.id).desc(),
+            User.full_name.asc(),
+        )
+        .limit(safe_limit)
+    ).all()
+
+    return [
+        {
+            "id": student.id,
+            "full_name": student.full_name,
+            "student_id": student.student_id,
+            "course": student.course,
+            "year": student.year,
+            "section": student.section,
+            "borrow_count": int(borrow_count),
+        }
+        for student, borrow_count in rows
+    ]
+
 
 @app.get("/books/{book_id}")
 def get_book(
@@ -1904,7 +2788,7 @@ def borrow_book(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    if current_user.role == "student":
+    if current_user.role in ("student", "faculty"):
         if payload.user_id is not None and payload.user_id != current_user.id:
             raise HTTPException(
                 status_code=403,
@@ -1934,14 +2818,15 @@ def borrow_book(
             status_code=404,
             detail="Active user not found.",
         )
-
-    # Students may submit borrowing requests only from Monday to Friday.
-    # weekday(): Monday = 0 ... Sunday = 6.
-    if user.role == "student" and date.today().weekday() >= 5:
+    if user.borrowing_suspended:
         raise HTTPException(
             status_code=403,
-            detail="Student borrowing is available only from Monday to Friday.",
+            detail="Your library borrowing privileges are suspended because you have an unsettled lost/damaged book case. Please contact the Librarian.",
         )
+
+    # Enforce the Admin-configured borrowing schedule using Philippine Time.
+    if user.role in ("student", "faculty"):
+        enforce_borrowing_schedule(db)
 
     if not book or not book.is_active:
         raise HTTPException(
@@ -1982,10 +2867,16 @@ def approve_borrowing(
     db: Session = Depends(get_db),
     admin: User = Depends(require_admin),
 ):
-    if payload.due_date < date.today():
+    today = date.today()
+    if payload.due_date < today:
         raise HTTPException(
             status_code=400,
             detail="Due date cannot be in the past.",
+        )
+    if payload.due_date > today + timedelta(days=7):
+        raise HTTPException(
+            status_code=400,
+            detail="Return due date cannot be more than 7 days from today.",
         )
 
     record = db.get(Borrowing, borrowing_id)
@@ -2052,6 +2943,313 @@ def list_borrowings(
     return [borrowing_out(row) for row in rows]
 
 # =========================================================
+# LOST / DAMAGED BOOKS (ADMIN ONLY)
+# =========================================================
+
+@app.get("/lost-books")
+def list_lost_book_cases(
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_admin),
+):
+    rows = db.scalars(select(LostBookCase).order_by(LostBookCase.created_at.desc())).all()
+    return [lost_book_case_out(row) for row in rows]
+
+
+
+def create_user_notification(db: Session, user_id: int, title: str, message: str, notification_type: str = "library"):
+    db.add(UserNotification(
+        user_id=user_id,
+        title=title,
+        message=message,
+        notification_type=notification_type,
+        is_read=False,
+    ))
+
+
+@app.get("/notifications")
+def get_my_notifications(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    # Backfill notifications for Lost/Damaged cases created before this feature
+    # was added. Exact-message checks make this safe to run on every refresh.
+    existing_cases = db.scalars(
+        select(LostBookCase)
+        .where(LostBookCase.user_id == current_user.id)
+        .order_by(LostBookCase.created_at.asc())
+    ).all()
+
+    added_backfill = False
+    for case in existing_cases:
+        book = db.get(Book, case.book_id)
+        book_title = book.title if book else f"Book #{case.book_id}"
+        case_type = (case.case_type or "lost").lower()
+        report_title = f"{case_type.title()} book case reported"
+        report_message = (
+            f"A {case_type} book case was recorded for “{book_title}”. "
+            f"Your borrowing privileges are temporarily suspended until the case is settled. "
+            f"Amount due: PHP {float(case.amount_due or 0):.2f}. "
+            f"Settlement deadline: {case.deadline.isoformat()}."
+        )
+        report_exists = db.scalar(
+            select(UserNotification.id).where(
+                UserNotification.user_id == current_user.id,
+                UserNotification.notification_type == "lost_damaged_book",
+                UserNotification.title == report_title,
+                UserNotification.message == report_message,
+            ).limit(1)
+        )
+        if not report_exists:
+            create_user_notification(
+                db, current_user.id, report_title, report_message, "lost_damaged_book"
+            )
+            added_backfill = True
+
+        if case.resolution_status in ("paid", "replaced"):
+            status_label = (
+                "payment received" if case.resolution_status == "paid"
+                else "replacement received"
+            )
+            resolution_title = "Lost/damaged book case updated"
+            resolution_message = (
+                f"The library has confirmed that your {case_type} book case for "
+                f"“{book_title}” has been settled ({status_label}). "
+                f"Your borrowing restriction has been updated."
+            )
+            resolution_exists = db.scalar(
+                select(UserNotification.id).where(
+                    UserNotification.user_id == current_user.id,
+                    UserNotification.notification_type == "lost_damaged_book",
+                    UserNotification.title == resolution_title,
+                    UserNotification.message == resolution_message,
+                ).limit(1)
+            )
+            if not resolution_exists:
+                create_user_notification(
+                    db, current_user.id, resolution_title,
+                    resolution_message, "lost_damaged_book"
+                )
+                added_backfill = True
+
+    if added_backfill:
+        db.commit()
+
+    rows = db.scalars(
+        select(UserNotification)
+        .where(UserNotification.user_id == current_user.id)
+        .order_by(UserNotification.created_at.desc())
+        .limit(100)
+    ).all()
+    return [{
+        "id": row.id,
+        "title": row.title,
+        "message": row.message,
+        "notification_type": row.notification_type,
+        "is_read": row.is_read,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+    } for row in rows]
+
+
+@app.post("/notifications/{notification_id}/read")
+def mark_my_notification_read(
+    notification_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    row = db.get(UserNotification, notification_id)
+    if not row or row.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Notification not found.")
+    row.is_read = True
+    db.commit()
+    return {"success": True}
+
+
+@app.post("/borrowings/{borrowing_id}/report-lost")
+def report_lost_or_damaged_book(
+    borrowing_id: int,
+    payload: LostBookReport,
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_admin),
+):
+    record = db.get(Borrowing, borrowing_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Borrowing record not found.")
+    if record.status != "borrowed":
+        raise HTTPException(status_code=409, detail="Only currently borrowed books can be reported lost or damaged.")
+    existing = db.scalar(select(LostBookCase).where(LostBookCase.borrowing_id == borrowing_id))
+    if existing:
+        raise HTTPException(status_code=409, detail="A lost/damaged case already exists for this borrowing record.")
+
+    today = date.today()
+    deadline = payload.deadline or (today + timedelta(days=15))
+    if deadline < today or deadline > today + timedelta(days=30):
+        raise HTTPException(status_code=400, detail="The settlement deadline must be within 30 days from the report date.")
+
+    # NEUST manual: lost book = current value + PHP 50 processing fee.
+    # Additional fines are accepted only up to the documented value + PHP 50 ceiling.
+    cap = float(payload.market_value) + 50.0
+    requested_total = float(payload.market_value) + 50.0 + float(payload.additional_fine)
+    amount_due = min(requested_total, cap)
+
+    case = LostBookCase(
+        borrowing_id=record.id,
+        user_id=record.user_id,
+        book_id=record.book_id,
+        report_date=today,
+        market_value=payload.market_value,
+        processing_fee=50,
+        additional_fine=max(0.0, amount_due - float(payload.market_value) - 50.0),
+        amount_due=amount_due,
+        deadline=deadline,
+        case_type=payload.case_type,
+        resolution_status="unsettled",
+        resolution_note=payload.note,
+    )
+    record.status = "lost"
+    user = db.get(User, record.user_id)
+    if user:
+        user.borrowing_suspended = True
+    book = db.get(Book, record.book_id)
+    if book:
+        # The missing/damaged copy is no longer counted as part of the collection.
+        book.total_copies = max(book.available_copies, book.total_copies - 1)
+    db.add(case)
+    book_title = book.title if book else f"Book #{record.book_id}"
+    create_user_notification(
+        db,
+        record.user_id,
+        f"{payload.case_type.title()} book case reported",
+        f"A {payload.case_type} book case was recorded for “{book_title}”. Your borrowing privileges are temporarily suspended until the case is settled. Amount due: PHP {amount_due:.2f}. Settlement deadline: {deadline.isoformat()}.",
+        "lost_damaged_book",
+    )
+    db.commit()
+    db.refresh(case)
+    return lost_book_case_out(case)
+
+
+
+@app.post("/lost-books/{case_id}/receipt")
+async def upload_lost_book_receipt(
+    case_id: int,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_admin),
+):
+    case = db.get(LostBookCase, case_id)
+    if not case:
+        raise HTTPException(status_code=404, detail="Lost/damaged book case not found.")
+    if not SUPABASE_ENABLED or not supabase:
+        raise HTTPException(status_code=503, detail="Receipt storage is not configured. Check backend Supabase credentials.")
+    content_type = (file.content_type or "").lower()
+    if content_type not in ALLOWED_RECEIPT_TYPES:
+        raise HTTPException(status_code=415, detail="Only JPG, PNG, WEBP, or PDF receipts are allowed.")
+    contents = await file.read(MAX_RECEIPT_BYTES + 1)
+    if not contents:
+        raise HTTPException(status_code=400, detail="The selected receipt file is empty.")
+    if len(contents) > MAX_RECEIPT_BYTES:
+        raise HTTPException(status_code=413, detail="Receipt file must be 5 MB or smaller.")
+    safe_name = re.sub(r"[^A-Za-z0-9._-]", "_", Path(file.filename or "receipt").name)[:120]
+    key = f"case-{case.id}/{uuid.uuid4().hex}_{safe_name}"
+    try:
+        storage_upload(BUCKET_RECEIPTS, key, contents, content_type)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="Could not upload the receipt to Supabase Storage. Confirm the receipt-attachments bucket exists.") from exc
+
+    old_note = case.resolution_note or ""
+    old_note = re.sub(r"(?:\s*\|\s*)?Receipt Storage Key: [^|]+", "", old_note).strip(" |")
+    case.resolution_note = " | ".join(part for part in [old_note, f"Receipt Attachment: {safe_name}", f"Receipt Storage Key: {key}"] if part)
+    db.commit()
+    return {"success": True, "filename": safe_name}
+
+
+@app.get("/lost-books/{case_id}/receipt")
+def view_lost_book_receipt(
+    case_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    case = db.get(LostBookCase, case_id)
+    if not case:
+        raise HTTPException(status_code=404, detail="Lost/damaged book case not found.")
+    if current_user.role != "admin" and current_user.id != case.user_id:
+        raise HTTPException(status_code=403, detail="You are not allowed to view this receipt.")
+    match = re.search(r"Receipt Storage Key: ([^|]+)", case.resolution_note or "")
+    if not match:
+        raise HTTPException(status_code=404, detail="No receipt attachment has been uploaded for this case.")
+    if not SUPABASE_ENABLED or not supabase:
+        raise HTTPException(status_code=503, detail="Receipt storage is not configured.")
+    key = match.group(1).strip()
+    try:
+        contents = storage_download(BUCKET_RECEIPTS, key)
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail="Receipt attachment could not be found in storage.") from exc
+    extension = Path(key).suffix.lower()
+    media_type = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp", ".pdf": "application/pdf"}.get(extension, "application/octet-stream")
+    filename = Path(key).name.split("_", 1)[-1]
+    return Response(
+        content=contents,
+        media_type=media_type,
+        headers={"Content-Disposition": f'inline; filename="{filename}"', "Cache-Control": "private, no-store"},
+    )
+
+
+@app.post("/lost-books/{case_id}/resolve")
+def resolve_lost_book_case(
+    case_id: int,
+    payload: LostBookResolution,
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_admin),
+):
+    case = db.get(LostBookCase, case_id)
+    if not case:
+        raise HTTPException(status_code=404, detail="Lost/damaged book case not found.")
+    if case.resolution_status != "unsettled":
+        raise HTTPException(status_code=409, detail="This case has already been resolved.")
+
+    case.resolution_status = payload.resolution_status
+    existing_receipt_key = re.search(r"Receipt Storage Key: ([^|]+)", case.resolution_note or "")
+    submitted_note = payload.note or case.resolution_note or ""
+    if existing_receipt_key and "Receipt Storage Key:" not in submitted_note:
+        submitted_note = " | ".join(part for part in [submitted_note.strip(" |"), f"Receipt Storage Key: {existing_receipt_key.group(1).strip()}"] if part)
+    case.resolution_note = submitted_note
+    case.resolved_at = datetime.utcnow()
+
+    if payload.resolution_status in ("paid", "replaced"):
+        user = db.get(User, case.user_id)
+        if user:
+            other_open_cases = db.scalar(
+                select(func.count(LostBookCase.id)).where(
+                    LostBookCase.user_id == case.user_id,
+                    LostBookCase.id != case.id,
+                    LostBookCase.resolution_status == "unsettled",
+                )
+            ) or 0
+            user.borrowing_suspended = other_open_cases > 0
+
+        if payload.resolution_status == "replaced":
+            book = db.get(Book, case.book_id)
+            if book:
+                book.total_copies += 1
+                # Replacement becomes a new available copy.
+                book.available_copies += 1
+
+    book = db.get(Book, case.book_id)
+    book_title = book.title if book else f"Book #{case.book_id}"
+    if payload.resolution_status in ("paid", "replaced"):
+        status_label = "payment received" if payload.resolution_status == "paid" else "replacement received"
+        create_user_notification(
+            db,
+            case.user_id,
+            "Lost/damaged book case updated",
+            f"The library has confirmed that your {case.case_type} book case for “{book_title}” has been settled ({status_label}). Your borrowing restriction has been updated.",
+            "lost_damaged_book",
+        )
+    db.commit()
+    db.refresh(case)
+    return lost_book_case_out(case)
+
+
+# =========================================================
 # RETURN BOOKS (ADMIN ONLY)
 # =========================================================
 
@@ -2100,6 +3298,104 @@ def return_book(
     }
 
 # =========================================================
+# STUDENT / FACULTY PROBLEM REPORTS
+# =========================================================
+
+def problem_report_out(report: ProblemReport, user: Optional[User] = None):
+    return {
+        "id": report.id,
+        "user_id": report.user_id,
+        "student_name": user.full_name if user else None,
+        "student_email": user.email if user else None,
+        "student_id": user.student_id if user else None,
+        "category": report.category,
+        "description": report.description,
+        "status": report.status,
+        "admin_note": report.admin_note,
+        "created_at": report.created_at.isoformat() if report.created_at else None,
+        "updated_at": report.updated_at.isoformat() if report.updated_at else None,
+    }
+
+
+@app.post("/problem-reports", status_code=201)
+def submit_problem_report(
+    payload: ProblemReportCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    category = payload.category.strip()
+    description = payload.description.strip()
+    if not category or not description:
+        raise HTTPException(status_code=422, detail="Category and description are required.")
+    report = ProblemReport(
+        user_id=user.id,
+        category=category,
+        description=description,
+        status="pending",
+    )
+    db.add(report)
+    db.commit()
+    db.refresh(report)
+    return {
+        "message": "Your problem report was submitted successfully.",
+        "report": problem_report_out(report, user),
+    }
+
+
+@app.get("/problem-reports")
+def list_problem_reports(
+    status_filter: Optional[str] = None,
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_admin),
+):
+    if status_filter and status_filter not in ("pending", "in_progress", "resolved"):
+        raise HTTPException(status_code=400, detail="Invalid problem report status.")
+    stmt = (
+        select(ProblemReport, User)
+        .join(User, User.id == ProblemReport.user_id)
+        .order_by(ProblemReport.created_at.desc())
+    )
+    if status_filter:
+        stmt = stmt.where(ProblemReport.status == status_filter)
+    return [problem_report_out(report, owner) for report, owner in db.execute(stmt).all()]
+
+
+@app.patch("/problem-reports/{report_id}")
+def update_problem_report(
+    report_id: int,
+    payload: ProblemReportUpdate,
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_admin),
+):
+    report = db.get(ProblemReport, report_id)
+    if report is None:
+        raise HTTPException(status_code=404, detail="Problem report not found.")
+
+    report.status = payload.status
+    report.admin_note = (payload.admin_note or "").strip() or None
+    report.updated_at = datetime.utcnow()
+
+    if report.status in ("in_progress", "resolved"):
+        status_label = "being reviewed" if report.status == "in_progress" else "marked as resolved"
+        note_text = f" Admin note: {report.admin_note}" if report.admin_note else ""
+        create_user_notification(
+            db,
+            report.user_id,
+            "Your problem report was updated",
+            f"The library administrator has {status_label}.{note_text}",
+            "problem_report",
+        )
+
+    db.commit()
+    db.refresh(report)
+    owner = db.get(User, report.user_id)
+    return {
+        "message": "Problem report updated.",
+        "report": problem_report_out(report, owner),
+    }
+
+
+# =========================================================
 # REPORTS (ADMIN ONLY)
 # =========================================================
 
@@ -2135,6 +3431,62 @@ def summary(
             for record in records
         ),
     }
+
+
+@app.get("/reports/borrowing-statistics")
+def borrowing_statistics(
+    academic_year: str = "2026-2027",
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_admin),
+):
+    """Admin-only department statistics. Mid-Year is excluded."""
+    if academic_year != "2026-2027":
+        raise HTTPException(status_code=400, detail="Currently supported academic year is 2026-2027.")
+
+    records = db.execute(
+        select(Borrowing, User, Book)
+        .join(User, User.id == Borrowing.user_id)
+        .join(Book, Book.id == Borrowing.book_id)
+        .where(Borrowing.status.in_(("borrowed", "returned")))
+    ).all()
+
+    semester_defs = [
+        ("1st", "1st Semester", "July 20 – November 21, 2026", date(2026, 7, 20), date(2026, 11, 21)),
+        ("2nd", "2nd Semester", "December 7, 2026 – April 30, 2027", date(2026, 12, 7), date(2027, 4, 30)),
+    ]
+    semesters = []
+    for key, label, date_range, start_date, end_date in semester_defs:
+        department_counts = {code: {"total": 0, "book_ids": set()} for code in ("BSIT", "BSED", "BSBA")}
+        book_counts = {}
+        for borrowing, user, book in records:
+            borrowed_at = borrowing.borrowed_at
+            borrowed_date = borrowed_at.date() if hasattr(borrowed_at, "date") else borrowed_at
+            if borrowed_date is None or not (start_date <= borrowed_date <= end_date):
+                continue
+            department = (getattr(user, "course", None) or "").strip().upper()
+            if department not in department_counts:
+                continue
+            department_counts[department]["total"] += 1
+            department_counts[department]["book_ids"].add(book.id)
+            book_counts[book.title] = book_counts.get(book.title, 0) + 1
+
+        departments = {
+            code: {"total": values["total"], "unique_books": len(values["book_ids"])}
+            for code, values in department_counts.items()
+        }
+        top_books = [
+            {"title": title, "total": count}
+            for title, count in sorted(book_counts.items(), key=lambda item: (-item[1], item[0]))[:10]
+        ]
+        semesters.append({
+            "key": key, "label": label, "date_range": date_range,
+            "departments": departments,
+            "total": sum(item["total"] for item in departments.values()),
+            "top_books": top_books,
+        })
+
+    return {"academic_year": academic_year, "semesters": semesters, "mid_year_included": False}
+
 
 @app.get("/reports/transactions")
 def transaction_report(
@@ -3601,6 +4953,75 @@ def seed_requested_library_books():
                 is_active=has_real_book_author(item.get("author")),
             ))
             added += 1
+
+        # Apply a one-time, balanced 1/2/3-copy distribution to every active
+        # catalog book. A SystemSetting marker prevents the distribution from
+        # being reassigned every time the API restarts.
+        db.flush()
+        distribution_setting_key = "book_copy_distribution_v1"
+        distribution_setting = db.get(SystemSetting, distribution_setting_key)
+
+        if distribution_setting is None:
+            active_books = db.scalars(
+                select(Book).where(Book.is_active.is_(True)).order_by(Book.id.asc())
+            ).all()
+
+            borrowed_counts_rows = db.query(
+                Borrowing.book_id, func.count(Borrowing.id)
+            ).filter(
+                Borrowing.status == "borrowed",
+                Borrowing.returned_at.is_(None),
+            ).group_by(Borrowing.book_id).all()
+            borrowed_counts = {
+                book_id: int(count)
+                for book_id, count in borrowed_counts_rows
+            }
+
+            # The three target quantities are distributed as evenly as
+            # possible, then shuffled deterministically across book IDs.
+            copy_targets = [1, 2, 3] * (len(active_books) // 3)
+            copy_targets.extend([1, 2, 3][:len(active_books) % 3])
+            random.Random(20261115).shuffle(copy_targets)
+
+            final_distribution = {1: 0, 2: 0, 3: 0}
+            protected_books = 0
+
+            for book, target_copies in zip(active_books, copy_targets):
+                # Protect already-borrowed copies. Use both the inventory
+                # balance and active borrowing records so no live loan is
+                # accidentally removed from the book's total inventory.
+                inventory_borrowed = max(
+                    0,
+                    int(book.total_copies or 0) - int(book.available_copies or 0),
+                )
+                recorded_borrowed = borrowed_counts.get(book.id, 0)
+                borrowed_copies = max(inventory_borrowed, recorded_borrowed)
+                assigned_total = max(target_copies, borrowed_copies)
+
+                book.total_copies = assigned_total
+                book.available_copies = assigned_total - borrowed_copies
+
+                final_distribution[assigned_total] = final_distribution.get(assigned_total, 0) + 1
+                if assigned_total > target_copies:
+                    protected_books += 1
+
+            db.add(SystemSetting(
+                key=distribution_setting_key,
+                value=json.dumps({
+                    "applied": True,
+                    "active_books": len(active_books),
+                    "distribution": final_distribution,
+                    "protected_books": protected_books,
+                    "targets": [1, 2, 3],
+                }),
+            ))
+            print(
+                "LibTrack book-copy distribution applied: "
+                f"1 copy={final_distribution.get(1, 0)}, "
+                f"2 copies={final_distribution.get(2, 0)}, "
+                f"3 copies={final_distribution.get(3, 0)}, "
+                f"protected books={protected_books}."
+            )
 
         db.commit()
         print(
