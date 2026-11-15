@@ -560,8 +560,6 @@ app.add_middleware(
         "http://localhost:3000",
         "http://127.0.0.1:3000",
         "https://libtrack-poc.vercel.app",
-        # Capacitor Android WebView origin used by the installed APK.
-        "https://localhost",
     ],
     allow_credentials=False,
     allow_methods=[
@@ -797,8 +795,7 @@ def save_profile_photo(user: User, data_url: str):
     if not contents or len(contents) > 3 * 1024 * 1024:
         raise HTTPException(status_code=413, detail="Profile photo must be 3 MB or smaller.")
     extension = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp"}[mime_type]
-    # Unique object keys prevent browsers from showing an older cached profile photo.
-    key = f"users/{user.id}/profile-{uuid.uuid4().hex}.{extension}"
+    key = f"users/{user.id}/profile.{extension}"
     try:
         storage_upload(BUCKET_PROFILE_PHOTOS, key, contents, mime_type)
         public_url = supabase.storage.from_(BUCKET_PROFILE_PHOTOS).get_public_url(key)

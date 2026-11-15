@@ -5844,6 +5844,7 @@ function App() {
                     <section className="settings-admin-panel" style={{ padding:0, border:0, background:'transparent', boxShadow:'none' }}>
                       <div className="settings-section-title settings-admin-links-title" style={{ marginTop:22 }}>
                         <div><span>ADMINISTRATOR ONLY</span><h3>Manage LibTrack</h3></div>
+                        
                       </div>
                       <div className="settings-shortcut-grid admin-shortcuts">
                         <button className="settings-shortcut" onClick={() => navigate('profile')}><span className="settings-shortcut-icon">👤</span><span><strong>Admin Profile</strong><small>View your administrator account</small></span><b>›</b></button>
